@@ -79,7 +79,7 @@ OBJS-$(ARCH_X86) += x86/cpu.o
 
 
 TESTPROGS = adler32 aes avstring base64 cpu crc des eval file fifo lfg lls \
-            md5 opt pca parseutils rational sha tree
+            md5 opt pca fpca parseutils rational sha tree
 TESTPROGS-$(HAVE_LZO1X_999_COMPRESS) += lzo
 
 DIRS = arm bfin sh4 x86
