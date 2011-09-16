@@ -203,7 +203,9 @@ int main(void){
     }
 
 
+    START_TIMER
     ff_pca(pca, eigenvector, eigenvalue);
+    STOP_TIMER("pca");
     for(i=0; i<LEN; i++){
         pca->count= 1;
         pca->mean[i]= 0;
