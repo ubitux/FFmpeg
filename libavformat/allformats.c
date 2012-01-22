@@ -280,6 +280,7 @@ void av_register_all(void)
     REGISTER_PROTOCOL (CACHE, cache);
     REGISTER_PROTOCOL (CONCAT, concat);
     REGISTER_PROTOCOL (CRYPTO, crypto);
+    REGISTER_PROTOCOL (DVD, dvd);
     REGISTER_PROTOCOL (FFRTMPCRYPT, ffrtmpcrypt);
     REGISTER_PROTOCOL (FFRTMPHTTP, ffrtmphttp);
     REGISTER_PROTOCOL (FILE, file);

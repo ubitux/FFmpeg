@@ -223,6 +223,8 @@ int avio_put_str16le(AVIOContext *s, const char *str);
  */
 #define AVSEEK_FORCE 0x20000
 
+#define AVSEEK_CHAPTER 0x40000
+
 /**
  * fseek() equivalent for AVIOContext.
  * @return new position or AVERROR.

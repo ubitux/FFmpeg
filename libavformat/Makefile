@@ -395,6 +395,7 @@ OBJS-$(CONFIG_BLURAY_PROTOCOL)           += bluray.o
 OBJS-$(CONFIG_CACHE_PROTOCOL)            += cache.o
 OBJS-$(CONFIG_CONCAT_PROTOCOL)           += concat.o
 OBJS-$(CONFIG_CRYPTO_PROTOCOL)           += crypto.o
+OBJS-$(CONFIG_DVD_PROTOCOL)              += dvdproto.o
 OBJS-$(CONFIG_FFRTMPCRYPT_PROTOCOL)      += rtmpcrypt.o rtmpdh.o
 OBJS-$(CONFIG_FFRTMPHTTP_PROTOCOL)       += rtmphttp.o
 OBJS-$(CONFIG_FILE_PROTOCOL)             += file.o
