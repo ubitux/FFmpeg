@@ -1684,6 +1684,8 @@ void av_set_pts_info(AVStream *s, int pts_wrap_bits,
 #define AVSEEK_FLAG_BYTE     2 ///< seeking based on position in bytes
 #define AVSEEK_FLAG_ANY      4 ///< seek to any frame, even non-keyframes
 #define AVSEEK_FLAG_FRAME    8 ///< seeking based on frame number
+#define AVSEEK_FLAG_DIRECT  16 ///< seek directly, skipping any stamps and translation
+#define AVSEEK_FLAG_CHAPTER 32 ///< seek to chapter, if supported
 
 /**
  * @addtogroup lavf_encoding
