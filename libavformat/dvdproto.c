@@ -19,6 +19,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include <stdint.h>
+
 #include <dvdnav/dvdnav.h>
 #include <dvdnav/dvd_types.h>
 
@@ -30,11 +32,11 @@
 #include "libavformat/avio.h"
 #include "libavformat/url.h"
 
-#define	DVD_PROTO_PREFIX "dvd:"
+#define DVD_PROTO_PREFIX "dvd:"
 
-#define	MAX_ATTACH_AUDIO_LANGUAGES	8
-#define	MAX_ATTACH_BUTTONS             36
-#define	MAX_ATTACH_SUB_LANGUAGES       32
+#define MAX_ATTACH_AUDIO_LANGUAGES      8
+#define MAX_ATTACH_BUTTONS             36
+#define MAX_ATTACH_SUB_LANGUAGES       32
 
 typedef enum {
     DVDEffectUnknown,
@@ -66,15 +68,15 @@ typedef struct {
     uint16_t type;
     uint16_t wait;
 
-    //	when buttons
+    // when buttons
     uint16_t highlight_index;
     uint16_t button_count;
     DVDAttachmentButton buttons[MAX_ATTACH_BUTTONS];
 
-    //	when color-palette
+    // when color-palette
     uint32_t rgba_palette[16];
 
-    //	expected size of the video pictures (allows for skip of scan-stream)
+    // expected size of the video pictures (allows for skip of scan-stream)
     uint16_t video_width, video_height;
     int8_t video_aspect;                 ///< 0 means 4:3, 2 means 16:9
 
