@@ -73,10 +73,15 @@ SECTION .text
 ;-----------------------------------------------------------------------------
 ; RGB to Y/UV.
 ;
-; void <fmt>ToY_<opt>(uint8_t *dst, const uint8_t *src, int w);
+; void <fmt>ToY_<opt>(uint8_t *dst, const uint8_t *src,
+;                     const uint8_t *unused1, const uint8_t *unused2,
+;                     int w, uint32_t *unused);
 ; and
-; void <fmt>toUV_<opt>(uint8_t *dstU, uint8_t *dstV, const uint8_t *src,
-;                      const uint8_t *unused, int w);
+; void <fmt>toUV_<opt>(uint8_t *dstU, uint8_t *dstV,
+;                      const uint8_t *unused0,
+;                      const uint8_t *src1,
+;                      const uint8_t *src2,
+;                      int w, uint32_t *unused)
 ;-----------------------------------------------------------------------------
 
 ; %1 = nr. of XMM registers
