@@ -15,6 +15,8 @@ EXAMPLES=       decoding_encoding                  \
                 demuxing                           \
                 filtering_video                    \
                 filtering_audio                    \
+                fft2d                              \
+                fftw2d                             \
                 metadata                           \
                 muxing                             \
                 resampling_audio                   \
@@ -25,6 +27,8 @@ OBJS=$(addsuffix .o,$(EXAMPLES))
 # the following examples make explicit use of the math library
 decoding_encoding: LDLIBS += -lm
 muxing:            LDLIBS += -lm
+fftw2d:            LDLIBS  = $(shell pkg-config --libs fftw3f)
+fft2d:             LDLIBS += -lm
 
 .phony: all clean-test clean
 
