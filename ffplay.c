@@ -28,7 +28,11 @@
 #include <math.h>
 #include <limits.h>
 #include <signal.h>
+#if CONFIG_LIBASS
+#include <ass/ass.h>
+#endif
 #include "libavutil/avstring.h"
+#include "libavutil/avassert.h"
 #include "libavutil/colorspace.h"
 #include "libavutil/mathematics.h"
 #include "libavutil/pixdesc.h"
@@ -51,6 +55,7 @@
 # include "libavfilter/avfiltergraph.h"
 # include "libavfilter/buffersink.h"
 # include "libavfilter/buffersrc.h"
+# include "libavfilter/drawutils.h"
 #endif
 
 #include <SDL.h>
@@ -222,6 +227,7 @@ typedef struct VideoState {
     int subtitle_stream_changed;
     AVStream *subtitle_st;
     PacketQueue subtitleq;
+    int ass_packets_present;
     SubPicture subpq[SUBPICTURE_QUEUE_SIZE];
     int subpq_size, subpq_rindex, subpq_windex;
     SDL_mutex *subpq_mutex;
@@ -348,6 +354,71 @@ int64_t get_valid_channel_layout(int64_t channel_layout, int channels)
     else
         return 0;
 }
+
+/* We use libass for the rendering, and the lavfi/drawutils for blending */
+#define TEXT_SUBTITLES_RENDERING (CONFIG_LIBASS && CONFIG_AVFILTER)
+
+#if TEXT_SUBTITLES_RENDERING
+static ASS_Library  *libass_library;
+static ASS_Renderer *libass_renderer;
+static ASS_Track    *libass_track;
+static FFDrawContext subrender_draw;
+
+static const int libass_log_level_map[] = {
+    [0] = AV_LOG_QUIET,
+    [1] = AV_LOG_PANIC,
+    [2] = AV_LOG_FATAL,
+    [3] = AV_LOG_ERROR,
+    [4] = AV_LOG_WARNING,
+    [5] = AV_LOG_INFO,
+    [6] = AV_LOG_VERBOSE,
+    [7] = AV_LOG_DEBUG,
+};
+
+static void libass_cb_log(int ass_level, const char *fmt, va_list args, void *ctx)
+{
+    int level = libass_log_level_map[ass_level];
+    av_vlog(ctx, level, fmt, args);
+    av_log(ctx, level, "\n");
+}
+
+static int init_text_sub_rendering(void)
+{
+    libass_library = ass_library_init();
+    if (!libass_library) {
+        av_log(NULL, AV_LOG_ERROR, "Could not initialize libass.\n");
+        return AVERROR(EINVAL);
+    }
+    ass_set_message_cb(libass_library, libass_cb_log, NULL);
+
+    libass_renderer = ass_renderer_init(libass_library);
+    if (!libass_renderer) {
+        av_log(NULL, AV_LOG_ERROR, "Could not initialize libass renderer.\n");
+        return AVERROR(EINVAL);
+    }
+
+    libass_track = ass_new_track(libass_library);
+    if (!libass_track) {
+        av_log(NULL, AV_LOG_ERROR, "Could not create a libass track\n");
+        return AVERROR(EINVAL);
+    }
+
+    ass_set_fonts(libass_renderer, NULL, NULL, 1, NULL, 1);
+    return 0;
+}
+
+static void uninit_text_sub_rendering(void)
+{
+    if (libass_renderer)
+        ass_renderer_done(libass_renderer);
+    if (libass_library)
+        ass_library_done(libass_library);
+}
+
+#else
+static int    init_text_sub_rendering(void) { return 0; }
+static void uninit_text_sub_rendering(void) { }
+#endif
 
 static int packet_queue_put(PacketQueue *q, AVPacket *pkt);
 
@@ -799,6 +870,45 @@ static void calculate_display_rect(SDL_Rect *rect, int scr_xleft, int scr_ytop, 
     rect->h = FFMAX(height, 1);
 }
 
+// FIXME: draw api is private, won't build with shared
+static void blend_text_subtitles(VideoPicture *vp)
+{
+#if TEXT_SUBTITLES_RENDERING
+
+/* libass stores an RGBA color in the format RRGGBBTT, where TT is the transparency level */
+#define AR(c)  ( (c)>>24)
+#define AG(c)  (((c)>>16)&0xFF)
+#define AB(c)  (((c)>>8) &0xFF)
+#define AA(c)  ((0xFF-c) &0xFF)
+
+    AVPicture pict;
+    long long now = vp->pts * 1000LL;
+    ASS_Image *image = ass_render_frame(libass_renderer, libass_track,
+                                        now, NULL);
+
+    SDL_LockYUVOverlay(vp->bmp);
+    pict.data[0] = vp->bmp->pixels[0];
+    pict.data[1] = vp->bmp->pixels[2];
+    pict.data[2] = vp->bmp->pixels[1];
+
+    pict.linesize[0] = vp->bmp->pitches[0];
+    pict.linesize[1] = vp->bmp->pitches[2];
+    pict.linesize[2] = vp->bmp->pitches[1];
+    while (image) {
+        uint8_t rgba_color[] = {AR(image->color), AG(image->color), AB(image->color), AA(image->color)};
+        FFDrawColor color;
+        ff_draw_color(&subrender_draw, &color, rgba_color);
+        ff_blend_mask(&subrender_draw, &color,
+                      pict.data, pict.linesize,
+                      vp->bmp->w, vp->bmp->h,
+                      image->bitmap, image->stride, image->w, image->h,
+                      3, 0, image->dst_x, image->dst_y);
+        image = image->next;
+    }
+    SDL_UnlockYUVOverlay(vp->bmp);
+#endif
+}
+
 static void video_image_display(VideoState *is)
 {
     VideoPicture *vp;
@@ -813,6 +923,9 @@ static void video_image_display(VideoState *is)
             if (is->subpq_size > 0) {
                 sp = &is->subpq[is->subpq_rindex];
 
+                if (sp->sub.format)
+                    blend_text_subtitles(vp);
+                else
                 if (vp->pts >= sp->pts + ((float) sp->sub.start_display_time / 1000)) {
                     SDL_LockYUVOverlay (vp->bmp);
 
@@ -1036,6 +1149,7 @@ static void do_exit(VideoState *is)
         printf("\n");
     SDL_Quit();
     av_log(NULL, AV_LOG_QUIET, "%s", "");
+    uninit_text_sub_rendering();
     exit(0);
 }
 
@@ -2024,13 +2138,20 @@ static int subtitle_thread(void *arg)
         if (pkt->pts != AV_NOPTS_VALUE)
             pts = av_q2d(is->subtitle_st->time_base) * pkt->pts;
 
+        if (is->ic->streams[pkt->stream_index]->codec->codec_id == AV_CODEC_ID_ASS) {
+            // TODO
+            is->ass_packets_present = 1;
+            ass_process_chunk(libass_track, pkt->data, pkt->size, pts, pkt->duration);
+        } else {
         avcodec_decode_subtitle2(is->subtitle_st->codec, &sp->sub,
                                  &got_subtitle, pkt);
-        if (got_subtitle && sp->sub.format == 0) {
+        if (got_subtitle && (sp->sub.format == 0 ||
+                             (sp->sub.format && TEXT_SUBTITLES_RENDERING))) {
             if (sp->sub.pts != AV_NOPTS_VALUE)
                 pts = sp->sub.pts / (double)AV_TIME_BASE;
             sp->pts = pts;
 
+            if (sp->sub.format == 0) { // bitmap subtitle
             for (i = 0; i < sp->sub.num_rects; i++)
             {
                 for (j = 0; j < sp->sub.rects[i]->nb_colors; j++)
@@ -2042,6 +2163,24 @@ static int subtitle_thread(void *arg)
                     YUVA_OUT((uint32_t*)sp->sub.rects[i]->pict.data[1] + j, y, u, v, a);
                 }
             }
+            } else if (TEXT_SUBTITLES_RENDERING) { // text subtitles
+                for (i = 0; i < sp->sub.num_rects; i++) {
+                    char *ass_line = sp->sub.rects[i]->ass;
+                    /* XXX: the FFmpeg ASS decoder is outputting ASS lines
+                     * instead of the muxed layout of ASS (such as specified in
+                     * Matroska, so without the timing information, but with a
+                     * field order), so we process the line as data instead of
+                     * using ass_process_chunk() with the packet pts and
+                     * duration.
+                     * The other FFmpeg text subtitles decoders also follow
+                     * this model and currently output their subtitles events
+                     * as if they were lines read from a standalone .ass file.
+                     * This causes various technical issues and need to be
+                     * changed in the long term. */
+                    ass_process_data(libass_track, ass_line, strlen(ass_line));
+                }
+            } else
+                av_assert0(0);
 
             /* now we can update the picture count */
             if (++is->subpq_windex == SUBPICTURE_QUEUE_SIZE)
@@ -2049,6 +2188,7 @@ static int subtitle_thread(void *arg)
             SDL_LockMutex(is->subpq_mutex);
             is->subpq_size++;
             SDL_UnlockMutex(is->subpq_mutex);
+        }
         }
         av_free_packet(pkt);
     }
@@ -2797,6 +2937,21 @@ static int read_thread(void *arg)
     if (infinite_buffer < 0 && is->realtime)
         infinite_buffer = 1;
 
+#if TEXT_SUBTITLES_RENDERING
+    if (is->video_st && is->subtitle_st) {
+        ret = ff_draw_init(&subrender_draw, AV_PIX_FMT_YUV420P, 0);
+        if (ret < 0)
+            return ret;
+        ass_set_frame_size(libass_renderer,
+                           is->video_st->codec->width,
+                           is->video_st->codec->height);
+        if (is->subtitle_st->codec->subtitle_header)
+            ass_process_codec_private(libass_track,
+                                      is->subtitle_st->codec->subtitle_header,
+                                      is->subtitle_st->codec->subtitle_header_size);
+    }
+#endif
+
     for (;;) {
         if (is->abort_request)
             break;
@@ -3527,6 +3682,9 @@ int main(int argc, char **argv)
     SDL_EventState(SDL_ACTIVEEVENT, SDL_IGNORE);
     SDL_EventState(SDL_SYSWMEVENT, SDL_IGNORE);
     SDL_EventState(SDL_USEREVENT, SDL_IGNORE);
+
+    if (init_text_sub_rendering() < 0)
+        do_exit(NULL);
 
     if (av_lockmgr_register(lockmgr)) {
         fprintf(stderr, "Could not initialize lock manager!\n");
