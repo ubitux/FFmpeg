@@ -55,31 +55,56 @@ static void print_digraph(FILE *outfile, AVFilterGraph *graph)
     int i, j;
 
     fprintf(outfile, "digraph G {\n");
-    fprintf(outfile, "node [shape=box]\n");
-    fprintf(outfile, "rankdir=LR\n");
+    fprintf(outfile, "  fontsize=14\n");
+    fprintf(outfile, "  node [shape=Mrecord,style=filled,fontsize=13]\n");
 
     for (i = 0; i < graph->nb_filters; i++) {
         char filter_ctx_label[128];
         const AVFilterContext *filter_ctx = graph->filters[i];
 
-        snprintf(filter_ctx_label, sizeof(filter_ctx_label), "%s\\n(%s)",
-                 filter_ctx->name,
-                 filter_ctx->filter->name);
+        fprintf(outfile, "  subgraph cluster_%d {\n", i);
+        fprintf(outfile, "    style=filled\n");
+        fprintf(outfile, "    penwidth=2\n");
+        fprintf(outfile, "    label=<<b>%s</b><br/><i>%s</i>>\n",
+                filter_ctx->filter->name, filter_ctx->name);
+
+#define PRINT_PADS(linktype, padtype, io, srcsinkcolor) do {                                    \
+    if (filter_ctx->linktype##_count) {                                                         \
+        for (j = 0; j < filter_ctx->linktype##_count; j++) {                                    \
+            uint32_t c;                                                                         \
+            const AVFilterLink *link = filter_ctx->linktype##s[j];                              \
+            switch (link->type) {                                                               \
+            case AVMEDIA_TYPE_VIDEO: c = io ? 0xa0eea0 : 0x50dd50; break;                       \
+            case AVMEDIA_TYPE_AUDIO: c = io ? 0xa0a0ee : 0x5050dd; break;                       \
+            default:                 c = io ? 0xeea090 : 0xdd5050; break;                       \
+            }                                                                                   \
+            fprintf(outfile, "    \"%s:%s:%p\" [label=\"%s\",fillcolor=\"#%02x%02x%02x\"]\n",   \
+                    filter_ctx->name, link->padtype##pad->name, link->padtype##pad,             \
+                    link->padtype##pad->name, c>>16, c>>8&0xff, c&0xff);                        \
+        }                                                                                       \
+    } else {                                                                                    \
+        fprintf(outfile, "    fillcolor=\"#" srcsinkcolor "\"\n");                              \
+    }                                                                                           \
+} while (0)
+
+        PRINT_PADS(input,  dst, 0, "ddff60");
+        PRINT_PADS(output, src, 1, "ffdd60");
+        fprintf(outfile, "  }\n");
+    }
+
+    fprintf(outfile, "\n");
+
+    for (i = 0; i < graph->nb_filters; i++) {
+        const AVFilterContext *filter_ctx = graph->filters[i];
 
         for (j = 0; j < filter_ctx->nb_outputs; j++) {
             AVFilterLink *link = filter_ctx->outputs[j];
             if (link) {
-                char dst_filter_ctx_label[128];
                 const AVFilterContext *dst_filter_ctx = link->dst;
 
-                snprintf(dst_filter_ctx_label, sizeof(dst_filter_ctx_label),
-                         "%s\\n(%s)",
-                         dst_filter_ctx->name,
-                         dst_filter_ctx->filter->name);
-
-                fprintf(outfile, "\"%s\" -> \"%s\" [ label= \"inpad:%s -> outpad:%s\\n",
-                        filter_ctx_label, dst_filter_ctx_label,
-                        link->srcpad->name, link->dstpad->name);
+                fprintf(outfile, "  \"%s:%s:%p\" -> \"%s:%s:%p\" [ label=\"",
+                        filter_ctx->name, link->srcpad->name, link->srcpad,
+                        dst_filter_ctx->name, link->dstpad->name, link->dstpad);
 
                 if (link->type == AVMEDIA_TYPE_VIDEO) {
                     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(link->format);
@@ -98,7 +123,7 @@ static void print_digraph(FILE *outfile, AVFilterGraph *graph)
                             link->sample_rate, buf,
                             link->time_base.num, link->time_base.den);
                 }
-                fprintf(outfile, "\" ];\n");
+                fprintf(outfile, "\",fontsize=12 ];\n");
             }
         }
     }
