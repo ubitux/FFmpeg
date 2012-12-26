@@ -221,6 +221,17 @@ static int request_frame(AVFilterLink *link)
     return 0;
 }
 
+static float get_tc_score(const int *stat)
+{
+    int inter = stat[TFF] + stat[BFF] + stat[UNDETERMINED] / 2;
+    int total = inter + stat[PROGRSSIVE] + stat[UNDETERMINED] / 2;
+
+    if (!total)
+        return 0;
+    /* score: how much we match the 2/5 interlace/progressive ratio */
+    return 1. - FFABS(inter/(float)total - 2/5.);
+}
+
 static av_cold void uninit(AVFilterContext *ctx)
 {
     IDETContext *idet = ctx->priv;
@@ -237,6 +248,8 @@ static av_cold void uninit(AVFilterContext *ctx)
            idet->poststat[PROGRSSIVE],
            idet->poststat[UNDETERMINED]
     );
+    av_log(ctx, AV_LOG_INFO, "Telecine score: %d%%\n",
+           (int)((get_tc_score(idet->prestat) + get_tc_score(idet->poststat)) / 2 * 100));
 
     avfilter_unref_bufferp(&idet->prev);
     avfilter_unref_bufferp(&idet->cur );
