@@ -1236,8 +1236,10 @@ static int mkv_write_packet_internal(AVFormatContext *s, AVPacket *pkt)
 
     if (codec->codec_type != AVMEDIA_TYPE_SUBTITLE) {
         mkv_write_block(s, pb, MATROSKA_ID_SIMPLEBLOCK, pkt, keyframe << 7);
+#if FF_API_ASS_SSA
     } else if (codec->codec_id == AV_CODEC_ID_SSA) {
         duration = mkv_write_ass_blocks(s, pb, pkt);
+#endif
     } else if (codec->codec_id == AV_CODEC_ID_SRT) {
         duration = mkv_write_srt_blocks(s, pb, pkt);
     } else {
@@ -1418,7 +1420,7 @@ AVOutputFormat ff_matroska_muxer = {
          ff_codec_bmp_tags, ff_codec_wav_tags,
          additional_audio_tags, additional_video_tags, 0
     },
-    .subtitle_codec    = AV_CODEC_ID_SSA,
+    .subtitle_codec    = AV_CODEC_ID_ASS,
     .query_codec       = mkv_query_codec,
 };
 #endif
