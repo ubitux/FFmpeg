@@ -39,6 +39,9 @@ typedef struct VolumeContext {
     const AVClass *class;
     AVFloatDSPContext fdsp;
     enum PrecisionType precision;
+    const char *volume_expr;    // TODO: make it a real expression
+    int evalonce;               // XXX: current means "do volume normalization"
+
     double volume;
     int    volume_i;
     int    channels;

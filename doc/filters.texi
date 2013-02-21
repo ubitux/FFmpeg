@@ -1250,6 +1250,7 @@ out
 Convert the audio sample format, sample rate and channel layout. This filter is
 not meant to be used directly.
 
+@anchor{volume}
 @section volume
 
 Adjust the input audio volume.
@@ -1272,6 +1273,10 @@ The output audio volume is given by the relation:
 @example
 @var{output_volume} = @var{volume} * @var{input_volume}
 @end example
+
+@var{volnorm} is special value for the volume, and can be used along with a
+filter such as @ref{ebur128} placed prior to the volume filter in the
+filtergraph, and configured to inject the appropriate metadata information.
 
 Default value for @var{volume} is 1.0.
 
@@ -1312,6 +1317,24 @@ volume=0.5
 Increase input audio power by 6 decibels using fixed-point precision:
 @example
 volume=volume=6dB:precision=fixed
+@end example
+
+@item
+Normalize in real-time an audio stream with @command{ffmpeg} and the help of
+the @ref{ebur128} filter:
+@example
+ffmpeg -i input.mp3 -af ebur128=volnorm=I,volume=volnorm output.wav
+@end example
+
+@item
+Normalize the audio using @ref{ebur128} and observe its effect using
+@command{ffplay}:
+@example
+ffplay -f lavfi -i '
+                    amovie=input.mp3, ebur128=video=1:volnorm=I [r128-0][a];
+  [a]               volume=volnorm,   ebur128=video=1           [r128-1][out1];
+  [r128-0]          pad=iw*2                                    [padded];
+  [padded][r128-1]  overlay=w'
 @end example
 @end itemize
 
@@ -6721,6 +6744,7 @@ setpts='(RTCTIME - RTCSTART) / (TB * 1000000)'
 @end example
 @end itemize
 
+@anchor{ebur128}
 @section ebur128
 
 EBU R128 scanner filter. This filter takes an audio stream as input and outputs

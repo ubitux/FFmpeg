@@ -45,7 +45,7 @@ static const char *precision_str[] = {
 
 static const AVOption volume_options[] = {
     { "volume", "set volume adjustment",
-            OFFSET(volume), AV_OPT_TYPE_DOUBLE, { .dbl = 1.0 }, 0, 0x7fffff, A|F },
+            OFFSET(volume_expr), AV_OPT_TYPE_STRING, { .str = "1.0" }, .flags = A|F },
     { "precision", "select mathematical precision",
             OFFSET(precision), AV_OPT_TYPE_INT, { .i64 = PRECISION_FLOAT }, PRECISION_FIXED, PRECISION_DOUBLE, A|F, "precision" },
         { "fixed",  "select 8-bit fixed-point",     0, AV_OPT_TYPE_CONST, { .i64 = PRECISION_FIXED  }, INT_MIN, INT_MAX, A|F, "precision" },
@@ -56,13 +56,27 @@ static const AVOption volume_options[] = {
 
 AVFILTER_DEFINE_CLASS(volume);
 
+static void set_fixed_volume(VolumeContext *vol, double volume)
+{
+    vol->volume_i = (int)(volume * 256 + 0.5);
+    vol->volume   = vol->volume_i / 256.0;
+}
+
 static av_cold int init(AVFilterContext *ctx, const char *args)
 {
     VolumeContext *vol = ctx->priv;
 
+    /* TODO: integrate "volnorm" as an expression constant */
+    if (!strcmp(vol->volume_expr, "volnorm")) {
+        vol->volume = 1.0;
+        vol->evalonce = 0;
+    } else {
+        vol->volume = av_strtod(vol->volume_expr, NULL);
+        vol->evalonce = 1;
+    }
+
     if (vol->precision == PRECISION_FIXED) {
-        vol->volume_i = (int)(vol->volume * 256 + 0.5);
-        vol->volume   = vol->volume_i / 256.0;
+        set_fixed_volume(vol, vol->volume);
         av_log(ctx, AV_LOG_VERBOSE, "volume:(%d/256)(%f)(%1.2fdB) precision:fixed\n",
                vol->volume_i, vol->volume, 20.0*log(vol->volume)/M_LN10);
     } else {
@@ -171,13 +185,13 @@ static void volume_init(VolumeContext *vol)
 
     switch (av_get_packed_sample_fmt(vol->sample_fmt)) {
     case AV_SAMPLE_FMT_U8:
-        if (vol->volume_i < 0x1000000)
+        if (vol->volume_i < 0x1000000 && vol->evalonce)
             vol->scale_samples = scale_samples_u8_small;
         else
             vol->scale_samples = scale_samples_u8;
         break;
     case AV_SAMPLE_FMT_S16:
-        if (vol->volume_i < 0x10000)
+        if (vol->volume_i < 0x10000 && vol->evalonce)
             vol->scale_samples = scale_samples_s16_small;
         else
             vol->scale_samples = scale_samples_s16;
@@ -216,10 +230,17 @@ static int config_output(AVFilterLink *outlink)
 
 static int filter_frame(AVFilterLink *inlink, AVFrame *buf)
 {
-    VolumeContext *vol    = inlink->dst->priv;
-    AVFilterLink *outlink = inlink->dst->outputs[0];
+    AVFilterContext *ctx  = inlink->dst;
+    VolumeContext *vol    = ctx->priv;
+    AVFilterLink *outlink = ctx->outputs[0];
     int nb_samples        = buf->nb_samples;
     AVFrame *out_buf;
+
+    if (!vol->evalonce) {
+        AVDictionaryEntry *e = av_dict_get(buf->metadata, "lavfi.volnorm", NULL, 0);
+        if (e)
+            set_fixed_volume(vol, av_strtod(e->value, NULL));
+    }
 
     if (vol->volume == 1.0 || vol->volume_i == 256)
         return ff_filter_frame(outlink, buf);

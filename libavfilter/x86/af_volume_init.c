@@ -38,7 +38,7 @@ void ff_volume_init_x86(VolumeContext *vol)
     enum AVSampleFormat sample_fmt = av_get_packed_sample_fmt(vol->sample_fmt);
 
     if (sample_fmt == AV_SAMPLE_FMT_S16) {
-        if (EXTERNAL_SSE2(mm_flags) && vol->volume_i < 32768) {
+        if (EXTERNAL_SSE2(mm_flags) && vol->volume_i < 32768 && vol->evalonce) {
             vol->scale_samples = ff_scale_samples_s16_sse2;
             vol->samples_align = 8;
         }
