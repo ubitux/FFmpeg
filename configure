@@ -2125,6 +2125,7 @@ deshake_filter_deps="avcodec"
 deshake_filter_select="dsputil"
 drawtext_filter_deps="libfreetype"
 ebur128_filter_deps="gpl"
+fft_filter_deps="avcodec"
 flite_filter_deps="libflite"
 frei0r_filter_deps="frei0r dlopen"
 frei0r_filter_extralibs='$ldl'

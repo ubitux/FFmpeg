@@ -120,6 +120,7 @@ OBJS-$(CONFIG_DRAWBOX_FILTER)                += vf_drawbox.o
 OBJS-$(CONFIG_DRAWTEXT_FILTER)               += vf_drawtext.o
 OBJS-$(CONFIG_EDGEDETECT_FILTER)             += vf_edgedetect.o
 OBJS-$(CONFIG_FADE_FILTER)                   += vf_fade.o
+OBJS-$(CONFIG_FFT_FILTER)                    += vf_fft.o fft2d.o
 OBJS-$(CONFIG_FIELD_FILTER)                  += vf_field.o
 OBJS-$(CONFIG_FIELDMATCH_FILTER)             += vf_fieldmatch.o
 OBJS-$(CONFIG_FIELDORDER_FILTER)             += vf_fieldorder.o
