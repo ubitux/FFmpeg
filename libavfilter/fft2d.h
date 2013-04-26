@@ -24,8 +24,8 @@
 #include <stdint.h>
 
 void ff_fft2d_end(void *ctx);
-void *ff_fft2d_init(int nxbits, int nybits);
-void *ff_fft2d_block(void *ctx, const uint8_t *src, int src_linesize);
-void ff_fft2d_block_inv(void *ctx, uint8_t *dst, int dst_linesize);
+void *ff_fft2d_init(int nxbits, int nybits, float *win_fn);
+void *ff_fft2d_block(void *ctx, const float *src, int src_linesize);
+void ff_fft2d_block_inv(void *ctx, float *dst, int dst_linesize);
 
 #endif
