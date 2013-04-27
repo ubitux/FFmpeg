@@ -27,8 +27,10 @@
 #define BSIZE (1<<(NBITS))
 
 #define WINDOWING 0
-#define WEIGHT    1
 #define EXPR      1
+#define DBG_F     0
+#define DBG_B     0
+#define NORM      1
 
 #if EXPR
 static const char *const var_names[] = { "psd", NULL };
@@ -70,7 +72,7 @@ static const AVOption fft_options[] = {
     { "s", NULL, OFFSET(sigma), AV_OPT_TYPE_FLOAT, {.dbl=0}, 0, 9999, .flags = FLAGS },
 #endif
     { "overlap", NULL, OFFSET(overlap), AV_OPT_TYPE_INT, {.i64=15}, 0, (1<<NBITS)-1, .flags = FLAGS },
-    { NULL },
+    { NULL }
 };
 
 AVFILTER_DEFINE_CLASS(fft);
@@ -92,19 +94,41 @@ static float *dct_block(FFTFilterContext *ctx, const float *src, int src_linesiz
 #else
         memcpy(line, src, BSIZE * sizeof(*line));
 #endif
+
+#if DBG_F
+        av_log(0,0,"DCT 1D\n");
+        av_log(0,0,"IN: ");
+        for (x = 0; x < BSIZE; x++)
+            av_log(0,0," %10g", ctx->block[x]);
+        av_log(0,0,"\n");
+#endif
+
         src += src_linesize;
         av_dct_calc(ctx->dct, line);
 
         column = ctx->tmp_block + y;
         for (x = 0; x < BSIZE; x++) {
+#if NORM
+            *line *= x == 0 ? 1. / sqrt(BSIZE) : sqrt(2. / BSIZE);
+#endif
             *column = *line++;
             column += BSIZE;
         }
+#if DBG_F
+        av_log(0,0,"OUT:");
+        for (x = 0; x < BSIZE; x++)
+            av_log(0,0," %10g", ctx->block[x]);
+        av_log(0,0,"\n");
+#endif
     }
 
     column = ctx->tmp_block;
     for (x = 0; x < BSIZE; x++) {
         av_dct_calc(ctx->dct, column);
+#if NORM
+        for (y = 0; y < BSIZE; y++)
+            column[y] *= y == 0 ? 1. / sqrt(BSIZE) : sqrt(2. / BSIZE);
+#endif
         column += BSIZE;
     }
 
@@ -118,32 +142,79 @@ static float *dct_block(FFTFilterContext *ctx, const float *src, int src_linesiz
 static void idct_block(FFTFilterContext *ctx, float *dst, int dst_linesize)
 {
     int x, y;
-    float *column = ctx->tmp_block;
+    float *block = ctx->block;
+    float *tmp = ctx->tmp_block;
 
-    for (y = 0; y < BSIZE; y++)
+#if DBG_B
+    float *dst0 = dst;
+    av_log(0,0,"INPUT:\n");
+    for (y = 0; y < BSIZE; y++) {
         for (x = 0; x < BSIZE; x++)
-            ctx->tmp_block[x*BSIZE + y] = ctx->block[y*BSIZE + x];
-
-    for (x = 0; x < BSIZE; x++) {
-        av_dct_calc(ctx->idct, column);
-        column += BSIZE;
+            av_log(0,0," %10g", ctx->block[y*BSIZE + x]);
+        av_log(0,0,"\n");
     }
+    av_log(0,0,"\n");
+#endif
 
     for (y = 0; y < BSIZE; y++) {
-        float *line = ctx->block;
 
+#if 0
+        av_log(0,0,"IDCT 1D\n");
+        av_log(0,0,"IN: ");
         for (x = 0; x < BSIZE; x++)
-            ctx->block[x] = ctx->tmp_block[x*BSIZE + y];
-
-        av_dct_calc(ctx->idct, line);
-        for (x = 0; x < BSIZE; x++)
-#if WEIGHT
-            dst[x] += line[x];
-#else
-            dst[x] = line[x];
+            av_log(0,0," %10g", block[x]);
+        av_log(0,0,"\n");
 #endif
-        dst += dst_linesize;
+
+#if NORM
+        for (x = 0; x < BSIZE; x++)
+            block[x] *= x == 0 ? sqrt(BSIZE) : 1./sqrt(2. / BSIZE);
+#endif
+
+        av_dct_calc(ctx->idct, block);
+
+#if 0
+        av_log(0,0,"OUT:");
+        for (x = 0; x < BSIZE; x++)
+            av_log(0,0," %10g", block[x]);
+        av_log(0,0,"\n");
+#endif
+
+        block += BSIZE;
     }
+
+    block = ctx->block;
+    for (y = 0; y < BSIZE; y++) {
+        for (x = 0; x < BSIZE; x++) {
+            tmp[x] = block[x*BSIZE + y];
+#if NORM
+            tmp[x] *= x == 0 ? sqrt(BSIZE) : 1./sqrt(2. / BSIZE);
+#endif
+        }
+
+#if 0
+        av_log(0,0,"IDCT 1D\n");
+        av_log(0,0,"IN: ");
+        for (x = 0; x < BSIZE; x++)
+            av_log(0,0," %10g", block[x]);
+        av_log(0,0,"\n");
+#endif
+
+        av_dct_calc(ctx->idct, tmp);
+        for (x = 0; x < BSIZE; x++)
+            dst[x*dst_linesize + y] += tmp[x];
+    }
+
+#if DBG_B
+    dst = dst0;
+    av_log(0,0,"OUTPUT:\n");
+    for (y = 0; y < BSIZE; y++) {
+        for (x = 0; x < BSIZE; x++)
+            av_log(0,0," %10g", dst[y*dst_linesize + x]);
+        av_log(0,0,"\n");
+    }
+    av_log(0,0,"\n");
+#endif
 }
 
 #if WINDOWING
@@ -217,7 +288,9 @@ static av_cold int init(AVFilterContext *ctx)
         return ret;
 #else
     fft->th = fft->sigma * 3.;
-    fft->th *= (BSIZE / 2.); // FIXME: shouldn't be necessary...
+#if !NORM
+    fft->th *= (BSIZE / 2.);
+#endif
 #endif
 
     fft->dct  = av_dct_init(NBITS, DCT_II);
@@ -257,8 +330,6 @@ static const float dct3ch[3][3] = {
     { 0.408248305320739746093750, -0.81649661064147949218750,  0.408248305320739746093750 },
 };
 
-#define DBG 0
-
 static void color_decorrelation(float **dst, int dst_linesize,
                                 const uint8_t *src, int src_linesize, int w, int h)
 {
@@ -293,16 +364,17 @@ static void color_correlation(uint8_t *dst, int dst_linesize,
 
     for (y = 0; y < h; y++) {
         uint8_t *dstp = dst;
+
         for (x = 0; x < w; x++) {
             dstp[0] = av_clip_uint8(src_r[x] * dct3ch[0][0] + src_g[x] * dct3ch[1][0] + src_b[x] * dct3ch[2][0]);
             dstp[1] = av_clip_uint8(src_r[x] * dct3ch[0][1] + src_g[x] * dct3ch[1][1] + src_b[x] * dct3ch[2][1]);
             dstp[2] = av_clip_uint8(src_r[x] * dct3ch[0][2] + src_g[x] * dct3ch[1][2] + src_b[x] * dct3ch[2][2]);
             dstp += 3;
         }
+        dst += dst_linesize;
         src_r += src_linesize;
         src_g += src_linesize;
         src_b += src_linesize;
-        dst += dst_linesize;
     }
 }
 
@@ -313,21 +385,20 @@ static void filter_plane(AVFilterContext *ctx,
 {
     int x, y, bx, by;
     FFTFilterContext *fft = ctx->priv;
-#if WEIGHT
+    const float *src0 = src;
     float *dst0 = dst;
     const float *weights = fft->weights;
-#endif
 
     memset(dst, 0, h * dst_linesize * sizeof(*dst));
 
     for (y = 0; y < h - BSIZE + 1; y += fft->step) {
         for (x = 0; x < w - BSIZE + 1; x += fft->step) {
             float *ftb = dct_block(fft, src + x, src_linesize);
-#if DBG
+#if DBG_F
             av_log(0,0,"INPUT:\n");
             for (by = 0; by < BSIZE; by++) {
                 for (bx = 0; bx < BSIZE; bx++)
-                    av_log(0,0," %10g", src[(y+by)*src_linesize + x+bx]);
+                    av_log(0,0," %10g", src0[(y+by)*src_linesize + x+bx]);
                 av_log(0,0,"\n");
             }
             av_log(0,0,"\n");
@@ -343,7 +414,7 @@ static void filter_plane(AVFilterContext *ctx,
             for (by = 0; by < BSIZE; by++) {
                 for (bx = 0; bx < BSIZE; bx++) {
 #if EXPR
-                    fft->var_values[VAR_PSD] = FFABS(*ftb) * (1 / (3. * BSIZE / 2.));
+                    fft->var_values[VAR_PSD] = FFABS(*ftb) * 1./3;
                     *ftb *= av_expr_eval(fft->expr, fft->var_values, fft);
 #else
                     if (FFABS(*ftb) < fft->th)
@@ -358,7 +429,6 @@ static void filter_plane(AVFilterContext *ctx,
         dst += fft->step * dst_linesize;
     }
 
-#if WEIGHT
     dst = dst0;
     for (y = 0; y < h; y++) {
         for (x = 0; x < w; x++)
@@ -366,7 +436,6 @@ static void filter_plane(AVFilterContext *ctx,
         dst += dst_linesize;
         weights += dst_linesize;
     }
-#endif
 }
 
 static int filter_frame(AVFilterLink *inlink, AVFrame *in)
