@@ -27,8 +27,6 @@
 #define NBITS 4
 #define BSIZE (1<<(NBITS))
 
-#define WINDOWING 0
-
 static const char *const var_names[] = { "c", NULL };
 enum { VAR_C, VAR_VARS_NB };
 
@@ -52,11 +50,6 @@ typedef struct {
     int step;
     DCTContext *dct, *idct;
     float *block, *tmp_block;
-
-#if WINDOWING
-    float *win_fn;
-#endif
-
 } FFTFilterContext;
 
 #define OFFSET(x) offsetof(FFTFilterContext, x)
@@ -74,20 +67,11 @@ static float *dct_block(FFTFilterContext *ctx, const float *src, int src_linesiz
 {
     int x, y;
     float *column;
-#if WINDOWING
-    const float *win_fn = ctx->win_fn;
-#endif
 
     for (y = 0; y < BSIZE; y++) {
         float *line = ctx->block;
 
-#if WINDOWING
-        for (x = 0; x < BSIZE; x++)
-            line[x] = src[x] * *win_fn++;
-#else
         memcpy(line, src, BSIZE * sizeof(*line));
-#endif
-
         src += src_linesize;
         av_dct_calc(ctx->dct, line);
 
@@ -138,24 +122,6 @@ static void idct_block(FFTFilterContext *ctx, float *dst, int dst_linesize)
             dst[x*dst_linesize + y] += tmp[x];
     }
 }
-
-#if WINDOWING
-static float *get_window_function(int w, int h)
-{
-    int x, y;
-    const float scale = 1. / sqrt(w * h);
-    float *t = av_malloc(w * h * sizeof(*t));
-
-    if (!t)
-        return NULL;
-
-#define HANN(i, winsize) (.5f * (1 - cos(2*M_PI*(i) / ((winsize)-1))))
-    for (y = 0; y < h; y++)
-        for (x = 0; x < w; x++)
-            t[y*w + x] = HANN(x, w) * HANN(y, h); // * scale;
-    return t;
-}
-#endif
 
 static int config_input(AVFilterLink *inlink)
 {
@@ -224,12 +190,6 @@ static av_cold int init(AVFilterContext *ctx)
         return AVERROR(ENOMEM);
 
     fft->step = BSIZE - fft->overlap;
-
-#if WINDOWING
-    fft->win_fn = get_window_function(BSIZE, BSIZE);
-    if (!fft->win_fn)
-        return AVERROR(ENOMEM);
-#endif
     return 0;
 }
 
@@ -390,9 +350,6 @@ static av_cold void uninit(AVFilterContext *ctx)
         av_free(fft->cbuf[i][2]);
     }
     av_expr_free(fft->expr);
-#if WINDOWING
-    av_free(fft->win_fn);
-#endif
 }
 
 static const AVFilterPad fft_inputs[] = {
