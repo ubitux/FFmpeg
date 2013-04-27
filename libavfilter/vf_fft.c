@@ -21,6 +21,7 @@
 #include "libavcodec/avfft.h"
 #include "libavutil/eval.h"
 #include "libavutil/opt.h"
+#include "drawutils.h"
 #include "internal.h"
 
 #define NBITS 4
@@ -40,6 +41,8 @@ typedef struct {
 
     float sigma;
     float th;
+
+    float color_dct[3][3];
 
     float *cbuf[2][3];
     int p_linesize;
@@ -159,6 +162,17 @@ static int config_input(AVFilterLink *inlink)
     FFTFilterContext *fft = inlink->dst->priv;
     const int linesize = FFALIGN(inlink->w, 16);
     int i, x, y, bx, by, *iweights;
+    const float dct_3x3[3][3] = {
+        { 1./sqrt(3),  1./sqrt(3),  1./sqrt(3) },
+        { 1./sqrt(2),           0, -1./sqrt(2) },
+        { 1./sqrt(6), -2./sqrt(6),  1./sqrt(6) },
+    };
+    uint8_t rgba_map[4];
+
+    ff_fill_rgba_map(rgba_map, inlink->format);
+    for (y = 0; y < 3; y++)
+        for (x = 0; x < 3; x++)
+            fft->color_dct[y][x] = dct_3x3[rgba_map[y]][rgba_map[x]];
 
     fft->p_linesize = linesize;
     for (i = 0; i < 2; i++) {
@@ -221,24 +235,15 @@ static av_cold int init(AVFilterContext *ctx)
 
 static int query_formats(AVFilterContext *ctx)
 {
-    // XXX: add more
     static const enum AVPixelFormat pix_fmts[] = {
-        AV_PIX_FMT_RGB24,
+        AV_PIX_FMT_BGR24, AV_PIX_FMT_RGB24,
         AV_PIX_FMT_NONE
     };
     ff_set_common_formats(ctx, ff_make_format_list(pix_fmts));
     return 0;
 }
 
-// TODO: construct a transposed dct3ch based on color_map
-// TODO: fixed point?
-static const float dct3ch[3][3] = {
-    { 0.577350258827209472656250,  0.57735025882720947265625,  0.577350258827209472656250 },
-    { 0.707106769084930419921875,  0.00000000000000000000000, -0.707106769084930419921875 },
-    { 0.408248305320739746093750, -0.81649661064147949218750,  0.408248305320739746093750 },
-};
-
-static void color_decorrelation(float **dst, int dst_linesize,
+static void color_decorrelation(float dct3ch[3][3], float **dst, int dst_linesize,
                                 const uint8_t *src, int src_linesize, int w, int h)
 {
     int x, y;
@@ -262,7 +267,7 @@ static void color_decorrelation(float **dst, int dst_linesize,
     }
 }
 
-static void color_correlation(uint8_t *dst, int dst_linesize,
+static void color_correlation(float dct3ch[3][3], uint8_t *dst, int dst_linesize,
                               float **src, int src_linesize, int w, int h)
 {
     int x, y;
@@ -354,12 +359,14 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
         av_frame_copy_props(out, in);
     }
 
-    color_decorrelation(fft->cbuf[0], fft->p_linesize, in->data[0], in->linesize[0], inlink->w, inlink->h);
+    color_decorrelation(fft->color_dct, fft->cbuf[0], fft->p_linesize,
+                        in->data[0], in->linesize[0], inlink->w, inlink->h);
     for (plane = 0; plane < 3; plane++)
         filter_plane(ctx, fft->cbuf[1][plane], fft->p_linesize,
                           fft->cbuf[0][plane], fft->p_linesize,
                           inlink->w, inlink->h);
-    color_correlation(out->data[0], out->linesize[0], fft->cbuf[1], fft->p_linesize, inlink->w, inlink->h);
+    color_correlation(fft->color_dct, out->data[0], out->linesize[0],
+                      fft->cbuf[1], fft->p_linesize, inlink->w, inlink->h);
 
     if (!direct)
         av_frame_free(&in);
