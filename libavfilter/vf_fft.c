@@ -28,7 +28,7 @@
 
 #define WINDOWING 0
 #define WEIGHT    1
-#define EXPR      1
+#define EXPR      0
 
 #if EXPR
 static const char *const var_names[] = { "psd", NULL };
@@ -217,7 +217,7 @@ static av_cold int init(AVFilterContext *ctx)
         return ret;
 #else
     fft->th = fft->sigma * 3.;
-    fft->th *= BSIZE; // FIXME: shouldn't be necessary...
+    fft->th *= (float)BSIZE; // FIXME: shouldn't be necessary...
 #endif
 
     fft->dct  = av_dct_init(NBITS, DCT_II);
@@ -313,22 +313,21 @@ static void filter_plane(AVFilterContext *ctx,
 {
     int x, y, bx, by;
     FFTFilterContext *fft = ctx->priv;
-    const float *srcp = src;
-    float *dstp = dst;
 #if WEIGHT
+    float *dst0 = dst;
     const float *weights = fft->weights;
 #endif
 
-    memset(dstp, 0, h * dst_linesize * sizeof(*dstp));
+    memset(dst, 0, h * dst_linesize * sizeof(*dst));
 
     for (y = 0; y < h - BSIZE + 1; y += fft->step) {
         for (x = 0; x < w - BSIZE + 1; x += fft->step) {
-            float *ftb = dct_block(fft, srcp + x, src_linesize);
+            float *ftb = dct_block(fft, src + x, src_linesize);
 #if DBG
             av_log(0,0,"INPUT:\n");
             for (by = 0; by < BSIZE; by++) {
                 for (bx = 0; bx < BSIZE; bx++)
-                    av_log(0,0," %10g", srcp[(y+by)*src_linesize + x+bx]);
+                    av_log(0,0," %10g", src[(y+by)*src_linesize + x+bx]);
                 av_log(0,0,"\n");
             }
             av_log(0,0,"\n");
@@ -353,18 +352,18 @@ static void filter_plane(AVFilterContext *ctx,
                     ftb++;
                 }
             }
-            idct_block(fft, dstp + x, dst_linesize);
+            idct_block(fft, dst + x, dst_linesize);
         }
-        srcp += fft->step * src_linesize;
-        dstp += fft->step * dst_linesize;
+        src += fft->step * src_linesize;
+        dst += fft->step * dst_linesize;
     }
 
 #if WEIGHT
-    dstp = dst;
+    dst = dst0;
     for (y = 0; y < h; y++) {
         for (x = 0; x < w; x++)
-            dstp[x] *= weights[x];
-        dstp += dst_linesize;
+            dst[x] *= weights[x];
+        dst += dst_linesize;
         weights += dst_linesize;
     }
 #endif
