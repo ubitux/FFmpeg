@@ -23,49 +23,33 @@
 #include "libavutil/opt.h"
 #include "internal.h"
 
-//#include "libavutil/mem.h"
-
 #define NBITS 4
-
-#if 0
-static const char *const var_names[] = {
-    "x", "y",
-    "w", "h",
-    "n", "t",
-    "re", "im",
-    "psd", // power spectral density, re*re + im*im
-    NULL
-};
-
-enum {
-    VAR_X, VAR_Y,
-    VAR_W, VAR_H,
-    VAR_N, VAR_T,
-    VAR_RE, VAR_IM,
-    VAR_PSD,
-    VAR_VARS_NB
-};
-#endif
+#define BSIZE (1<<(NBITS))
 
 #define WINDOWING 0
 #define WEIGHT    1
+#define EXPR      1
+
+#if EXPR
+static const char *const var_names[] = { "psd", NULL };
+enum { VAR_PSD, VAR_VARS_NB };
+#endif
 
 typedef struct {
     const AVClass *class;
-#if 0
+#if EXPR
     char *expr_str;
     AVExpr *expr;
     double var_values[VAR_VARS_NB];
-#endif
-
+#else
     float sigma;
     float th;
+#endif
 
     float *cbuf[2][3];
     int p_linesize;
     float *weights;
 
-    int bsize;
     int overlap;
     int step;
     DCTContext *dct, *idct;
@@ -80,8 +64,11 @@ typedef struct {
 #define OFFSET(x) offsetof(FFTFilterContext, x)
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM
 static const AVOption fft_options[] = {
-    //{ "e", NULL, OFFSET(expr_str), AV_OPT_TYPE_STRING, {.str=NULL}, .flags = FLAGS },
+#if EXPR
+    { "e", "set dct factor expression", OFFSET(expr_str), AV_OPT_TYPE_STRING, {.str=NULL}, .flags = FLAGS },
+#else
     { "s", NULL, OFFSET(sigma), AV_OPT_TYPE_FLOAT, {.dbl=0}, 0, 9999, .flags = FLAGS },
+#endif
     { "overlap", NULL, OFFSET(overlap), AV_OPT_TYPE_INT, {.i64=15}, 0, (1<<NBITS)-1, .flags = FLAGS },
     { NULL },
 };
@@ -96,34 +83,34 @@ static float *dct_block(FFTFilterContext *ctx, const float *src, int src_linesiz
     const float *win_fn = ctx->win_fn;
 #endif
 
-    for (y = 0; y < ctx->bsize; y++) {
+    for (y = 0; y < BSIZE; y++) {
         float *line = ctx->block;
 
 #if WINDOWING
-        for (x = 0; x < ctx->bsize; x++)
+        for (x = 0; x < BSIZE; x++)
             line[x] = src[x] * *win_fn++;
 #else
-        memcpy(line, src, ctx->bsize * sizeof(*line));
+        memcpy(line, src, BSIZE * sizeof(*line));
 #endif
         src += src_linesize;
         av_dct_calc(ctx->dct, line);
 
         column = ctx->tmp_block + y;
-        for (x = 0; x < ctx->bsize; x++) {
+        for (x = 0; x < BSIZE; x++) {
             *column = *line++;
-            column += ctx->bsize;
+            column += BSIZE;
         }
     }
 
     column = ctx->tmp_block;
-    for (x = 0; x < ctx->bsize; x++) {
+    for (x = 0; x < BSIZE; x++) {
         av_dct_calc(ctx->dct, column);
-        column += ctx->bsize;
+        column += BSIZE;
     }
 
-    for (y = 0; y < ctx->bsize; y++)
-        for (x = 0; x < ctx->bsize; x++)
-            ctx->block[y*ctx->bsize + x] = ctx->tmp_block[x*ctx->bsize + y];
+    for (y = 0; y < BSIZE; y++)
+        for (x = 0; x < BSIZE; x++)
+            ctx->block[y*BSIZE + x] = ctx->tmp_block[x*BSIZE + y];
 
     return ctx->block;
 }
@@ -133,23 +120,23 @@ static void idct_block(FFTFilterContext *ctx, float *dst, int dst_linesize)
     int x, y;
     float *column = ctx->tmp_block;
 
-    for (y = 0; y < ctx->bsize; y++)
-        for (x = 0; x < ctx->bsize; x++)
-            ctx->tmp_block[x*ctx->bsize + y] = ctx->block[y*ctx->bsize + x];
+    for (y = 0; y < BSIZE; y++)
+        for (x = 0; x < BSIZE; x++)
+            ctx->tmp_block[x*BSIZE + y] = ctx->block[y*BSIZE + x];
 
-    for (x = 0; x < ctx->bsize; x++) {
+    for (x = 0; x < BSIZE; x++) {
         av_dct_calc(ctx->idct, column);
-        column += ctx->bsize;
+        column += BSIZE;
     }
 
-    for (y = 0; y < ctx->bsize; y++) {
+    for (y = 0; y < BSIZE; y++) {
         float *line = ctx->block;
 
-        for (x = 0; x < ctx->bsize; x++)
-            ctx->block[x] = ctx->tmp_block[x*ctx->bsize + y];
+        for (x = 0; x < BSIZE; x++)
+            ctx->block[x] = ctx->tmp_block[x*BSIZE + y];
 
         av_dct_calc(ctx->idct, line);
-        for (x = 0; x < ctx->bsize; x++)
+        for (x = 0; x < BSIZE; x++)
 #if WEIGHT
             dst[x] += line[x];
 #else
@@ -198,10 +185,10 @@ static int config_input(AVFilterLink *inlink)
     iweights = av_calloc(inlink->h, linesize * sizeof(*iweights));
     if (!iweights)
         return AVERROR(ENOMEM);
-    for (y = 0; y < inlink->h - fft->bsize + 1; y += fft->step)
-        for (x = 0; x < inlink->w - fft->bsize + 1; x += fft->step)
-            for (by = 0; by < fft->bsize; by++)
-                for (bx = 0; bx < fft->bsize; bx++)
+    for (y = 0; y < inlink->h - BSIZE + 1; y += fft->step)
+        for (x = 0; x < inlink->w - BSIZE + 1; x += fft->step)
+            for (by = 0; by < BSIZE; by++)
+                for (bx = 0; bx < BSIZE; bx++)
                     iweights[(y + by)*linesize + x + bx]++;
     for (y = 0; y < inlink->h; y++)
         for (x = 0; x < inlink->w; x++)
@@ -213,10 +200,12 @@ static int config_input(AVFilterLink *inlink)
 
 static av_cold int init(AVFilterContext *ctx)
 {
-    //int ret;
+#if EXPR
+    int ret;
+#endif
     FFTFilterContext *fft = ctx->priv;
 
-#if 0
+#if EXPR
     if (!fft->expr_str) {
         av_log(ctx, AV_LOG_ERROR, "expression is mandatory\n");
         return AVERROR(EINVAL);
@@ -226,23 +215,23 @@ static av_cold int init(AVFilterContext *ctx)
                         NULL, NULL, NULL, NULL, 0, ctx);
     if (ret < 0)
         return ret;
+#else
+    fft->th = fft->sigma * 3.;
+    fft->th *= BSIZE; // FIXME: shouldn't be necessary...
 #endif
-
-    fft->bsize = 1 << NBITS;
 
     fft->dct  = av_dct_init(NBITS, DCT_II);
     fft->idct = av_dct_init(NBITS, DCT_III);
-    fft->block     = av_malloc(fft->bsize * fft->bsize * sizeof(*fft->block));
-    fft->tmp_block = av_malloc(fft->bsize * fft->bsize * sizeof(*fft->tmp_block));
+    fft->block     = av_malloc(BSIZE * BSIZE * sizeof(*fft->block));
+    fft->tmp_block = av_malloc(BSIZE * BSIZE * sizeof(*fft->tmp_block));
 
     if (!fft->dct || !fft->idct || !fft->tmp_block || !fft->block)
         return AVERROR(ENOMEM);
 
-    fft->step = fft->bsize - fft->overlap;
-    fft->th = fft->sigma * 3.;
+    fft->step = BSIZE - fft->overlap;
 
 #if WINDOWING
-    fft->win_fn = get_window_function(fft->bsize, fft->bsize);
+    fft->win_fn = get_window_function(BSIZE, BSIZE);
     if (!fft->win_fn)
         return AVERROR(ENOMEM);
 #endif
@@ -260,21 +249,13 @@ static int query_formats(AVFilterContext *ctx)
     return 0;
 }
 
-// FIXME: fixed point
-//static const float dct3ch[3][3] = {
-//    {0.5774,  0.5774,  0.5774}, // R
-//    {0.7071,       0, -0.7071}, // G
-//    {0.4082, -0.8165,  0.4082}, // B
-//};
-
 // TODO: construct a transposed dct3ch based on color_map
+// TODO: fixed point?
 static const float dct3ch[3][3] = {
     { 0.577350258827209472656250,  0.57735025882720947265625,  0.577350258827209472656250 },
     { 0.707106769084930419921875,  0.00000000000000000000000, -0.707106769084930419921875 },
     { 0.408248305320739746093750, -0.81649661064147949218750,  0.408248305320739746093750 },
 };
-
-//static int color_map[] = {0, 1, 2};
 
 #define DBG 0
 
@@ -338,68 +319,40 @@ static void filter_plane(AVFilterContext *ctx,
     const float *weights = fft->weights;
 #endif
 
-#if 0
-    for (y = 0; y < h; y++) {
-        memset(dstp, 0, w * sizeof(*dstp));
-        dstp += dst_linesize;
-    }
-    dstp = dst;
-#else
-    memset(dstp, 0, h*dst_linesize*sizeof(*dstp));
-#endif
+    memset(dstp, 0, h * dst_linesize * sizeof(*dstp));
 
-    for (y = 0; y < h - fft->bsize + 1; y += fft->step) {
-        for (x = 0; x < w - fft->bsize + 1; x += fft->step) {
+    for (y = 0; y < h - BSIZE + 1; y += fft->step) {
+        for (x = 0; x < w - BSIZE + 1; x += fft->step) {
             float *ftb = dct_block(fft, srcp + x, src_linesize);
-
-            //av_log(0,0,"filter block at (%d,%d) of size (%d/2+1,%d)\n",
-            //       x, y, fft->bsize, fft->bsize);
-
 #if DBG
             av_log(0,0,"INPUT:\n");
-            for (by = 0; by < fft->bsize; by++) {
-                for (bx = 0; bx < fft->bsize; bx++) {
+            for (by = 0; by < BSIZE; by++) {
+                for (bx = 0; bx < BSIZE; bx++)
                     av_log(0,0," %10g", srcp[(y+by)*src_linesize + x+bx]);
-                }
                 av_log(0,0,"\n");
             }
             av_log(0,0,"\n");
-
             av_log(0,0,"OUTPUT:\n");
-#endif
-
-            for (by = 0; by < fft->bsize; by++) {
-                //fft->var_values[VAR_Y] = by / (fft->bsize - 1);
-
-                for (bx = 0; bx < fft->bsize; bx++) {
-                    //double f;
-
-#if DBG
-                    av_log(0,0," %10g", *ftb/16.);
-#endif
-
-                    if (FFABS(*ftb) < fft->th*8.)
-                        *ftb = 0;
-                    ftb++;
-
-                    //fft->var_values[VAR_X] = bx / (fft->bsize/2);
-                    //fft->var_values[VAR_RE]  = cplx->re;
-                    //fft->var_values[VAR_IM]  = cplx->im;
-                    //fft->var_values[VAR_PSD] = cplx->re*cplx->re + cplx->im*cplx->im + 1e-16;
-                    //f = av_expr_eval(fft->expr, fft->var_values, fft);
-                    //av_log(0,0,"psd=%f -> f=%f\n", fft->var_values[VAR_PSD], f);
-                    //cplx->re *= f;
-                    //cplx->im *= f;
-                    //cplx++;
-                }
-#if DBG
+            for (by = 0; by < BSIZE; by++) {
+                for (bx = 0; bx < BSIZE; bx++)
+                    av_log(0,0," %10g", ftb[by*BSIZE + bx]);
                 av_log(0,0,"\n");
-#endif
             }
-#if DBG
             av_log(0,0,"\n");
 #endif
 
+            for (by = 0; by < BSIZE; by++) {
+                for (bx = 0; bx < BSIZE; bx++) {
+#if EXPR
+                    fft->var_values[VAR_PSD] = FFABS(*ftb); // / (3. * BSIZE);
+                    *ftb *= av_expr_eval(fft->expr, fft->var_values, fft);
+#else
+                    if (FFABS(*ftb) < fft->th)
+                        *ftb = 0;
+#endif
+                    ftb++;
+                }
+            }
             idct_block(fft, dstp + x, dst_linesize);
         }
         srcp += fft->step * src_linesize;
@@ -416,8 +369,6 @@ static void filter_plane(AVFilterContext *ctx,
     }
 #endif
 }
-
-//static const int order_map[] = {2, 0, 1};
 
 static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 {
@@ -439,13 +390,6 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
         }
         av_frame_copy_props(out, in);
     }
-
-#if 0
-    fft->var_values[VAR_N] = inlink->frame_count,
-    fft->var_values[VAR_T] = in->pts == AV_NOPTS_VALUE ? NAN : in->pts * av_q2d(inlink->time_base),
-    fft->var_values[VAR_W] = inlink->w;
-    fft->var_values[VAR_H] = inlink->h;
-#endif
 
     color_decorrelation(fft->cbuf[0], fft->p_linesize, in->data[0], in->linesize[0], inlink->w, inlink->h);
     for (plane = 0; plane < 3; plane++)
@@ -475,8 +419,11 @@ static av_cold void uninit(AVFilterContext *ctx)
         av_free(fft->cbuf[i][1]);
         av_free(fft->cbuf[i][2]);
     }
+#if EXPR
+    av_expr_free(fft->expr);
+#endif
 #if WINDOWING
-    av_free(bctx->win_fn);
+    av_free(fft->win_fn);
 #endif
 }
 
