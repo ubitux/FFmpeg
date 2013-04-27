@@ -27,26 +27,22 @@
 #define BSIZE (1<<(NBITS))
 
 #define WINDOWING 0
-#define EXPR      1
 #define DBG_F     0
 #define DBG_B     0
 #define NORM      1
 
-#if EXPR
-static const char *const var_names[] = { "psd", NULL };
-enum { VAR_PSD, VAR_VARS_NB };
-#endif
+static const char *const var_names[] = { "c", NULL };
+enum { VAR_C, VAR_VARS_NB };
 
 typedef struct {
     const AVClass *class;
-#if EXPR
+
     char *expr_str;
     AVExpr *expr;
     double var_values[VAR_VARS_NB];
-#else
+
     float sigma;
     float th;
-#endif
 
     float *cbuf[2][3];
     int p_linesize;
@@ -66,12 +62,9 @@ typedef struct {
 #define OFFSET(x) offsetof(FFTFilterContext, x)
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM
 static const AVOption fft_options[] = {
-#if EXPR
-    { "e", "set dct factor expression", OFFSET(expr_str), AV_OPT_TYPE_STRING, {.str=NULL}, .flags = FLAGS },
-#else
     { "s", NULL, OFFSET(sigma), AV_OPT_TYPE_FLOAT, {.dbl=0}, 0, 9999, .flags = FLAGS },
-#endif
     { "overlap", NULL, OFFSET(overlap), AV_OPT_TYPE_INT, {.i64=15}, 0, (1<<NBITS)-1, .flags = FLAGS },
+    { "e", "set dct factor expression", OFFSET(expr_str), AV_OPT_TYPE_STRING, {.str=NULL}, .flags = FLAGS },
     { NULL }
 };
 
@@ -271,26 +264,18 @@ static int config_input(AVFilterLink *inlink)
 
 static av_cold int init(AVFilterContext *ctx)
 {
-#if EXPR
-    int ret;
-#endif
     FFTFilterContext *fft = ctx->priv;
 
-#if EXPR
-    if (!fft->expr_str) {
-        av_log(ctx, AV_LOG_ERROR, "expression is mandatory\n");
-        return AVERROR(EINVAL);
+    if (fft->expr_str) {
+        int ret = av_expr_parse(&fft->expr, fft->expr_str, var_names,
+                                NULL, NULL, NULL, NULL, 0, ctx);
+        if (ret < 0)
+            return ret;
     }
 
-    ret = av_expr_parse(&fft->expr, fft->expr_str, var_names,
-                        NULL, NULL, NULL, NULL, 0, ctx);
-    if (ret < 0)
-        return ret;
-#else
     fft->th = fft->sigma * 3.;
 #if !NORM
     fft->th *= (BSIZE / 2.);
-#endif
 #endif
 
     fft->dct  = av_dct_init(NBITS, DCT_II);
@@ -411,16 +396,20 @@ static void filter_plane(AVFilterContext *ctx,
             av_log(0,0,"\n");
 #endif
 
-            for (by = 0; by < BSIZE; by++) {
-                for (bx = 0; bx < BSIZE; bx++) {
-#if EXPR
-                    fft->var_values[VAR_PSD] = FFABS(*ftb) * 1./3;
-                    *ftb *= av_expr_eval(fft->expr, fft->var_values, fft);
-#else
-                    if (FFABS(*ftb) < fft->th)
-                        *ftb = 0;
-#endif
-                    ftb++;
+            if (fft->expr) {
+                for (by = 0; by < BSIZE; by++) {
+                    for (bx = 0; bx < BSIZE; bx++) {
+                        fft->var_values[VAR_C] = FFABS(*ftb);
+                        *ftb++ *= av_expr_eval(fft->expr, fft->var_values, fft);
+                    }
+                }
+            } else {
+                for (by = 0; by < BSIZE; by++) {
+                    for (bx = 0; bx < BSIZE; bx++) {
+                        if (FFABS(*ftb) < fft->th)
+                            *ftb = 0;
+                        ftb++;
+                    }
                 }
             }
             idct_block(fft, dst + x, dst_linesize);
@@ -487,9 +476,7 @@ static av_cold void uninit(AVFilterContext *ctx)
         av_free(fft->cbuf[i][1]);
         av_free(fft->cbuf[i][2]);
     }
-#if EXPR
     av_expr_free(fft->expr);
-#endif
 #if WINDOWING
     av_free(fft->win_fn);
 #endif
