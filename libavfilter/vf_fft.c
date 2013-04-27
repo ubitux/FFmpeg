@@ -335,14 +335,14 @@ static void filter_plane(AVFilterContext *ctx,
     float *dstp = dst;
     const float *weights = fft->weights;
 
-#if 1
+#if 0
     for (y = 0; y < h; y++) {
         memset(dstp, 0, w * sizeof(*dstp));
         dstp += dst_linesize;
     }
     dstp = dst;
 #else
-    memset(dstp, 0, h*dst_linesize);
+    memset(dstp, 0, h*dst_linesize*sizeof(*dstp));
 #endif
 
     for (y = 0; y < h - fft->bh + 1; y++) {
@@ -375,7 +375,7 @@ static void filter_plane(AVFilterContext *ctx,
                     av_log(0,0," %10g", *ftb/16.);
 #endif
 
-                    if (FFABS(*ftb) < fft->th*16.)
+                    if (FFABS(*ftb) < fft->th*8.)
                         *ftb = 0;
                     ftb++;
 
