@@ -25,6 +25,8 @@
 
 //#include "libavutil/mem.h"
 
+#define NBITS 4
+
 #if 0
 static const char *const var_names[] = {
     "x", "y",
@@ -46,6 +48,7 @@ enum {
 #endif
 
 #define WINDOWING 0
+#define WEIGHT    1
 
 typedef struct {
     const AVClass *class;
@@ -62,8 +65,9 @@ typedef struct {
     int p_linesize;
     float *weights;
 
-    int nbits;
     int bsize;
+    int overlap;
+    int step;
     DCTContext *dct, *idct;
     float *block, *tmp_block;
 
@@ -78,6 +82,7 @@ typedef struct {
 static const AVOption fft_options[] = {
     //{ "e", NULL, OFFSET(expr_str), AV_OPT_TYPE_STRING, {.str=NULL}, .flags = FLAGS },
     { "s", NULL, OFFSET(sigma), AV_OPT_TYPE_FLOAT, {.dbl=0}, 0, 9999, .flags = FLAGS },
+    { "overlap", NULL, OFFSET(overlap), AV_OPT_TYPE_INT, {.i64=15}, 0, (1<<NBITS)-1, .flags = FLAGS },
     { NULL },
 };
 
@@ -122,8 +127,6 @@ static float *dct_block(FFTFilterContext *ctx, const float *src, int src_linesiz
 
     return ctx->block;
 }
-
-#define WEIGHT 1
 
 static void idct_block(FFTFilterContext *ctx, float *dst, int dst_linesize)
 {
@@ -195,8 +198,8 @@ static int config_input(AVFilterLink *inlink)
     iweights = av_calloc(inlink->h, linesize * sizeof(*iweights));
     if (!iweights)
         return AVERROR(ENOMEM);
-    for (y = 0; y < inlink->h - fft->bsize + 1; y++)
-        for (x = 0; x < inlink->w - fft->bsize + 1; x++)
+    for (y = 0; y < inlink->h - fft->bsize + 1; y += fft->step)
+        for (x = 0; x < inlink->w - fft->bsize + 1; x += fft->step)
             for (by = 0; by < fft->bsize; by++)
                 for (bx = 0; bx < fft->bsize; bx++)
                     iweights[(y + by)*linesize + x + bx]++;
@@ -225,17 +228,17 @@ static av_cold int init(AVFilterContext *ctx)
         return ret;
 #endif
 
-    fft->nbits = 4;
-    fft->bsize = 1 << fft->nbits;
+    fft->bsize = 1 << NBITS;
 
-    fft->dct  = av_dct_init(fft->nbits, DCT_II);
-    fft->idct = av_dct_init(fft->nbits, DCT_III);
+    fft->dct  = av_dct_init(NBITS, DCT_II);
+    fft->idct = av_dct_init(NBITS, DCT_III);
     fft->block     = av_malloc(fft->bsize * fft->bsize * sizeof(*fft->block));
     fft->tmp_block = av_malloc(fft->bsize * fft->bsize * sizeof(*fft->tmp_block));
 
     if (!fft->dct || !fft->idct || !fft->tmp_block || !fft->block)
         return AVERROR(ENOMEM);
 
+    fft->step = fft->bsize - fft->overlap;
     fft->th = fft->sigma * 3.;
 
 #if WINDOWING
@@ -331,7 +334,9 @@ static void filter_plane(AVFilterContext *ctx,
     FFTFilterContext *fft = ctx->priv;
     const float *srcp = src;
     float *dstp = dst;
+#if WEIGHT
     const float *weights = fft->weights;
+#endif
 
 #if 0
     for (y = 0; y < h; y++) {
@@ -343,8 +348,8 @@ static void filter_plane(AVFilterContext *ctx,
     memset(dstp, 0, h*dst_linesize*sizeof(*dstp));
 #endif
 
-    for (y = 0; y < h - fft->bsize + 1; y++) {
-        for (x = 0; x < w - fft->bsize + 1; x++) {
+    for (y = 0; y < h - fft->bsize + 1; y += fft->step) {
+        for (x = 0; x < w - fft->bsize + 1; x += fft->step) {
             float *ftb = dct_block(fft, srcp + x, src_linesize);
 
             //av_log(0,0,"filter block at (%d,%d) of size (%d/2+1,%d)\n",
@@ -397,8 +402,8 @@ static void filter_plane(AVFilterContext *ctx,
 
             idct_block(fft, dstp + x, dst_linesize);
         }
-        srcp += src_linesize;
-        dstp += dst_linesize;
+        srcp += fft->step * src_linesize;
+        dstp += fft->step * dst_linesize;
     }
 
 #if WEIGHT
