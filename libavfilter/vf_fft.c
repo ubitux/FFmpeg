@@ -22,8 +22,10 @@
 #include "libavutil/eval.h"
 #include "libavutil/opt.h"
 #include "internal.h"
-#include "fft2d.h"
 
+//#include "libavutil/mem.h"
+
+#if 0
 static const char *const var_names[] = {
     "x", "y",
     "w", "h",
@@ -41,31 +43,110 @@ enum {
     VAR_PSD,
     VAR_VARS_NB
 };
+#endif
 
 typedef struct {
     const AVClass *class;
+#if 0
     char *expr_str;
     AVExpr *expr;
     double var_values[VAR_VARS_NB];
-    int nxbits, nybits;
-    int blockw, blockh;
-    void *blockfft;
+#endif
+
+    //int nxbits, nybits;
+    //int bw, bh;
+    //void *blockfft;
+
+    float sigma;
+    float th;
 
     float *cbuf[2][3];
     int p_linesize;
     float *weights;
+
+    int nbits;
+    int bw, bh;
+    DCTContext *dct, *idct;
+    float *block, *tmp_block;
 
 } FFTFilterContext;
 
 #define OFFSET(x) offsetof(FFTFilterContext, x)
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM
 static const AVOption fft_options[] = {
-    { "e", NULL, OFFSET(expr_str), AV_OPT_TYPE_STRING, {.str=NULL}, .flags = FLAGS },
+    //{ "e", NULL, OFFSET(expr_str), AV_OPT_TYPE_STRING, {.str=NULL}, .flags = FLAGS },
+    { "s", NULL, OFFSET(sigma), AV_OPT_TYPE_FLOAT, {.dbl=0}, 0, 9999, .flags = FLAGS },
     { NULL },
 };
 
 AVFILTER_DEFINE_CLASS(fft);
 
+static float *dct_block(FFTFilterContext *ctx, const float *src, int src_linesize)
+{
+    int x, y;
+    float *column;
+
+    for (y = 0; y < ctx->bh; y++) {
+        float *line = ctx->block;
+
+        memcpy(line, src, ctx->bw * sizeof(*line));
+        src += src_linesize;
+        av_dct_calc(ctx->dct, line);
+
+        column = ctx->tmp_block + y;
+        for (x = 0; x < ctx->bw; x++) {
+            *column = *line++;
+            column += ctx->bh;
+        }
+    }
+
+    column = ctx->tmp_block;
+    for (x = 0; x < ctx->bw; x++) {
+        av_dct_calc(ctx->dct, column);
+        column += ctx->bh;
+    }
+
+    for (y = 0; y < ctx->bh; y++)
+        for (x = 0; x < ctx->bw; x++)
+            ctx->block[y*ctx->bw + x] = ctx->tmp_block[x*ctx->bh + y];
+
+    return ctx->block;
+}
+
+#define WEIGHT 1
+
+static void idct_block(FFTFilterContext *ctx, float *dst, int dst_linesize)
+{
+    int x, y;
+    float *column = ctx->tmp_block;
+
+    for (y = 0; y < ctx->bh; y++)
+        for (x = 0; x < ctx->bw; x++)
+            ctx->tmp_block[x*ctx->bh + y] = ctx->block[y*ctx->bw + x];
+
+    for (x = 0; x < ctx->bw; x++) {
+        av_dct_calc(ctx->idct, column);
+        column += ctx->bh;
+    }
+
+    for (y = 0; y < ctx->bh; y++) {
+        float *line = ctx->block;
+
+        for (x = 0; x < ctx->bw; x++)
+            ctx->block[x] = ctx->tmp_block[x*ctx->bh + y];
+
+        av_dct_calc(ctx->idct, line);
+        for (x = 0; x < ctx->bw; x++)
+#if WEIGHT
+            dst[x] += line[x];
+#else
+            dst[x] = line[x];
+#endif
+        dst += dst_linesize;
+    }
+}
+
+#if 0
 static float *get_window_function(int w, int h)
 {
     int x, y;
@@ -81,27 +162,13 @@ static float *get_window_function(int w, int h)
             t[y*w + x] = HANN(x, w) * HANN(y, h) * scale;
     return t;
 }
+#endif
 
 static int config_input(AVFilterLink *inlink)
 {
-    //int ret;
-    //AVFrame *cframe;
     FFTFilterContext *fft = inlink->dst->priv;
     const int linesize = FFALIGN(inlink->w, 16);
     int i, x, y, bx, by, *iweights;
-
-    //cframe = av_frame_alloc();
-    //if (!cframe)
-    //    return AVERROR(ENOMEM);
-    //cframe->width  = inlink->w;
-    //cframe->height = inlink->h;
-    //cframe->format = AV_PIX_FMT_GBRP16,
-    //ret = av_frame_get_buffer(cframe, 32);
-    //if (ret < 0) {
-    //    av_frame_free(&cframe);
-    //    return ret;
-    //}
-    //fft->cframe = cframe;
 
     fft->p_linesize = linesize;
     for (i = 0; i < 2; i++) {
@@ -112,19 +179,19 @@ static int config_input(AVFilterLink *inlink)
             return AVERROR(ENOMEM);
     }
 
-    fft->weights = av_calloc(inlink->h, linesize * sizeof(*fft->weights));
+    fft->weights = av_malloc(inlink->h * linesize * sizeof(*fft->weights));
     if (!fft->weights)
         return AVERROR(ENOMEM);
     iweights = av_calloc(inlink->h, linesize * sizeof(*iweights));
     if (!iweights)
         return AVERROR(ENOMEM);
-    for (y = 0; y < inlink->h - fft->blockh + 1; y++)
-        for (x = 0; x < inlink->w - fft->blockw + 1; x++)
-            for (by = 0; by < fft->blockh; by++)
-                for (bx = 0; bx < fft->blockw; bx++)
+    for (y = 0; y < inlink->h - fft->bh + 1; y++)
+        for (x = 0; x < inlink->w - fft->bw + 1; x++)
+            for (by = 0; by < fft->bh; by++)
+                for (bx = 0; bx < fft->bw; bx++)
                     iweights[(y + by)*linesize + x + bx]++;
-    for (y = 0; y < inlink->h - fft->blockh + 1; y++)
-        for (x = 0; x < inlink->w - fft->blockw + 1; x++)
+    for (y = 0; y < inlink->h; y++)
+        for (x = 0; x < inlink->w; x++)
             fft->weights[y*linesize + x] = 1. / iweights[y*linesize + x];
     av_free(iweights);
 
@@ -133,11 +200,11 @@ static int config_input(AVFilterLink *inlink)
 
 static av_cold int init(AVFilterContext *ctx)
 {
-    int ret;
+    //int ret;
     FFTFilterContext *fft = ctx->priv;
-    float *win_fn;
+    //float *win_fn;
 
-
+#if 0
     if (!fft->expr_str) {
         av_log(ctx, AV_LOG_ERROR, "expression is mandatory\n");
         return AVERROR(EINVAL);
@@ -147,20 +214,36 @@ static av_cold int init(AVFilterContext *ctx)
                         NULL, NULL, NULL, NULL, 0, ctx);
     if (ret < 0)
         return ret;
+#endif
 
+#if 0
     // FIXME: make configurable
     fft->nxbits = fft->nybits = 4;
 
-    fft->blockh = 1 << fft->nxbits;
-    fft->blockw = 1 << fft->nybits;
+    fft->bh = 1 << fft->nxbits;
+    fft->bw = 1 << fft->nybits;
 
-    win_fn = get_window_function(fft->blockw, fft->blockh);
+    win_fn = get_window_function(fft->bw, fft->bh);
     if (!win_fn)
         return AVERROR(ENOMEM);
 
     fft->blockfft = ff_fft2d_init(fft->nxbits, fft->nybits, NULL /*win_fn*/);
     if (!fft->blockfft)
         return AVERROR(ENOMEM);
+#endif
+
+    fft->nbits = 4;
+    fft->bw = fft->bh = 1 << fft->nbits;
+
+    fft->dct  = av_dct_init(fft->nbits, DCT_II);
+    fft->idct = av_dct_init(fft->nbits, DCT_III);
+    fft->block     = av_malloc(fft->bw * fft->bh * sizeof(*fft->block));
+    fft->tmp_block = av_malloc(fft->bh * fft->bw * sizeof(*fft->tmp_block));
+
+    if (!fft->dct || !fft->idct || !fft->tmp_block || !fft->block)
+        return AVERROR(ENOMEM);
+
+    fft->th = fft->sigma * 3.;
 
     return 0;
 }
@@ -169,7 +252,7 @@ static int query_formats(AVFilterContext *ctx)
 {
     // XXX: add more
     static const enum AVPixelFormat pix_fmts[] = {
-        AV_PIX_FMT_GBR24P,
+        AV_PIX_FMT_RGB24,
         AV_PIX_FMT_NONE
     };
     ff_set_common_formats(ctx, ff_make_format_list(pix_fmts));
@@ -183,7 +266,8 @@ static int query_formats(AVFilterContext *ctx)
 //    {0.4082, -0.8165,  0.4082}, // B
 //};
 
-const float dct3ch[3][3] = {
+// TODO: construct a transposed dct3ch based on color_map
+static const float dct3ch[3][3] = {
     { 0.577350258827209472656250,  0.57735025882720947265625,  0.577350258827209472656250 },
     { 0.707106769084930419921875,  0.00000000000000000000000, -0.707106769084930419921875 },
     { 0.408248305320739746093750, -0.81649661064147949218750,  0.408248305320739746093750 },
@@ -191,41 +275,52 @@ const float dct3ch[3][3] = {
 
 //static int color_map[] = {0, 1, 2};
 
-// FIXME: simplify
-static int color_map[] = {1, 2, 0};
-                       // G  B  R
+#define DBG 0
 
-static void color_decorrelation(float   **dst, int dst_linesize,
-                                uint8_t **src, int *src_linesize, int w, int h)
+static void color_decorrelation(float **dst, int dst_linesize,
+                                const uint8_t *src, int src_linesize, int w, int h)
 {
-    int x, y, p;
+    int x, y;
+    float *dstp_r = dst[0];
+    float *dstp_g = dst[1];
+    float *dstp_b = dst[2];
 
-    for (p = 0; p < 3; p++) {
-        for (y = 0; y < h; y++) {
-            for (x = 0; x < w; x++) {
-                dst[p][y*dst_linesize + x] =
-                                    src[0][y*src_linesize[0] + x] * dct3ch[color_map[p]][color_map[0]]
-                                  + src[1][y*src_linesize[1] + x] * dct3ch[color_map[p]][color_map[1]]
-                                  + src[2][y*src_linesize[2] + x] * dct3ch[color_map[p]][color_map[2]];
-            }
+    for (y = 0; y < h; y++) {
+        const uint8_t *srcp = src;
+
+        for (x = 0; x < w; x++) {
+            dstp_r[x] = srcp[0] * dct3ch[0][0] + srcp[1] * dct3ch[0][1] + srcp[2] * dct3ch[0][2];
+            dstp_g[x] = srcp[0] * dct3ch[1][0] + srcp[1] * dct3ch[1][1] + srcp[2] * dct3ch[1][2];
+            dstp_b[x] = srcp[0] * dct3ch[2][0] + srcp[1] * dct3ch[2][1] + srcp[2] * dct3ch[2][2];
+            srcp += 3;
         }
+        src += src_linesize;
+        dstp_r += dst_linesize;
+        dstp_g += dst_linesize;
+        dstp_b += dst_linesize;
     }
 }
 
-static void color_correlation(uint8_t **dst, int *dst_linesize,
-                              float   **src, int src_linesize, int w, int h)
+static void color_correlation(uint8_t *dst, int dst_linesize,
+                              float **src, int src_linesize, int w, int h)
 {
-    int x, y, p;
+    int x, y;
+    const float *src_r = src[0];
+    const float *src_g = src[1];
+    const float *src_b = src[2];
 
-    for (p = 0; p < 3; p++) {
-        for (y = 0; y < h; y++) {
-            for (x = 0; x < w; x++) {
-                dst[p][y*dst_linesize[p] + x] =
-                    av_clip_uint8(  src[0][y*src_linesize + x] * dct3ch[color_map[0]][color_map[p]]
-                                  + src[1][y*src_linesize + x] * dct3ch[color_map[1]][color_map[p]]
-                                  + src[2][y*src_linesize + x] * dct3ch[color_map[2]][color_map[p]]);
-            }
+    for (y = 0; y < h; y++) {
+        uint8_t *dstp = dst;
+        for (x = 0; x < w; x++) {
+            dstp[0] = av_clip_uint8(src_r[x] * dct3ch[0][0] + src_g[x] * dct3ch[1][0] + src_b[x] * dct3ch[2][0]);
+            dstp[1] = av_clip_uint8(src_r[x] * dct3ch[0][1] + src_g[x] * dct3ch[1][1] + src_b[x] * dct3ch[2][1]);
+            dstp[2] = av_clip_uint8(src_r[x] * dct3ch[0][2] + src_g[x] * dct3ch[1][2] + src_b[x] * dct3ch[2][2]);
+            dstp += 3;
         }
+        src_r += src_linesize;
+        src_g += src_linesize;
+        src_b += src_linesize;
+        dst += dst_linesize;
     }
 }
 
@@ -238,113 +333,145 @@ static void filter_plane(AVFilterContext *ctx,
     FFTFilterContext *fft = ctx->priv;
     const float *srcp = src;
     float *dstp = dst;
-    const float *iweights = fft->weights;
+    const float *weights = fft->weights;
 
+#if 1
+    for (y = 0; y < h; y++) {
+        memset(dstp, 0, w * sizeof(*dstp));
+        dstp += dst_linesize;
+    }
+    dstp = dst;
+#else
     memset(dstp, 0, h*dst_linesize);
+#endif
 
-    for (y = 0; y < h - fft->blockh + 1; y++) {
-        for (x = 0; x < w - fft->blockw + 1; x++) {
-            FFTComplex *cplx =
-                ff_fft2d_block(fft->blockfft, srcp + x, src_linesize);
+    for (y = 0; y < h - fft->bh + 1; y++) {
+        for (x = 0; x < w - fft->bw + 1; x++) {
+            float *ftb = dct_block(fft, srcp + x, src_linesize);
 
             //av_log(0,0,"filter block at (%d,%d) of size (%d/2+1,%d)\n",
-            //       x, y, fft->blockw, fft->blockh);
+            //       x, y, fft->bw, fft->bh);
 
+#if DBG
             av_log(0,0,"INPUT:\n");
-            for (by = 0; by < fft->blockh; by++) {
-                for (bx = 0; bx < fft->blockw; bx++) {
-                    av_log(0,0," %10g", srcp[x + by*fft->blockw + bx]);
+            for (by = 0; by < fft->bh; by++) {
+                for (bx = 0; bx < fft->bw; bx++) {
+                    av_log(0,0," %10g", srcp[(y+by)*src_linesize + x+bx]);
                 }
                 av_log(0,0,"\n");
             }
             av_log(0,0,"\n");
 
             av_log(0,0,"OUTPUT:\n");
-            for (by = 0; by < fft->blockh; by++) {
-                fft->var_values[VAR_Y] = by / (fft->blockh - 1);
+#endif
 
-                for (bx = 0; bx < fft->blockw/2 + 1; bx++) {
-                    double f;
+            for (by = 0; by < fft->bh; by++) {
+                //fft->var_values[VAR_Y] = by / (fft->bh - 1);
 
-                    av_log(0,0," %10g/%10g", cplx->re/8., cplx->im/8.);
-                    fft->var_values[VAR_X] = bx / (fft->blockw/2);
+                for (bx = 0; bx < fft->bw; bx++) {
+                    //double f;
 
-                    fft->var_values[VAR_RE]  = cplx->re;
-                    fft->var_values[VAR_IM]  = cplx->im;
-                    fft->var_values[VAR_PSD] = cplx->re*cplx->re + cplx->im*cplx->im + 1e-16;
+#if DBG
+                    av_log(0,0," %10g", *ftb/16.);
+#endif
 
-                    f = av_expr_eval(fft->expr, fft->var_values, fft);
+                    if (FFABS(*ftb) < fft->th*16.)
+                        *ftb = 0;
+                    ftb++;
+
+                    //fft->var_values[VAR_X] = bx / (fft->bw/2);
+                    //fft->var_values[VAR_RE]  = cplx->re;
+                    //fft->var_values[VAR_IM]  = cplx->im;
+                    //fft->var_values[VAR_PSD] = cplx->re*cplx->re + cplx->im*cplx->im + 1e-16;
+
+                    //f = av_expr_eval(fft->expr, fft->var_values, fft);
 
                     //av_log(0,0,"psd=%f -> f=%f\n", fft->var_values[VAR_PSD], f);
 
                     //cplx->re *= f;
                     //cplx->im *= f;
-                    cplx->re = FFABS(cplx->re / (fft->blockw )) > f ? cplx->re : 0;
-                    cplx->im = FFABS(cplx->im / (fft->blockw )) > f ? cplx->im : 0;
+                    //cplx->re = FFABS(cplx->re / (fft->bw )) > f ? cplx->re : 0;
+                    //cplx->im = FFABS(cplx->im / (fft->bw )) > f ? cplx->im : 0;
 
-                    cplx++;
+                    //cplx++;
                 }
+#if DBG
                 av_log(0,0,"\n");
+#endif
             }
+#if DBG
             av_log(0,0,"\n");
+#endif
 
-            ff_fft2d_block_inv(fft->blockfft, dstp + x, dst_linesize);
+            idct_block(fft, dstp + x, dst_linesize);
         }
         srcp += src_linesize;
         dstp += dst_linesize;
     }
 
+#if WEIGHT
     dstp = dst;
     for (y = 0; y < h; y++) {
         for (x = 0; x < w; x++)
-            dstp[x] *= iweights[x];
+            dstp[x] *= weights[x];
         dstp += dst_linesize;
-        iweights += dst_linesize;
+        weights += dst_linesize;
     }
+#endif
 }
 
-static const int order_map[] = {2, 0, 1};
+//static const int order_map[] = {2, 0, 1};
 
 static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 {
     AVFilterContext *ctx = inlink->dst;
     FFTFilterContext *fft = ctx->priv;
     AVFilterLink *outlink = inlink->dst->outputs[0];
-    int plane;
-    //AVFrame *out;
+    int direct, plane;
+    AVFrame *out;
 
-    //out = fft->cframe;
-    //out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
-    //if (!out) {
-    //    av_frame_free(&in);
-    //    return AVERROR(ENOMEM);
-    //}
-    //av_frame_copy_props(out, in);
+    if (av_frame_is_writable(in)) {
+        direct = 1;
+        out = in;
+    } else {
+        direct = 0;
+        out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
+        if (!out) {
+            av_frame_free(&in);
+            return AVERROR(ENOMEM);
+        }
+        av_frame_copy_props(out, in);
+    }
 
+#if 0
     fft->var_values[VAR_N] = inlink->frame_count,
     fft->var_values[VAR_T] = in->pts == AV_NOPTS_VALUE ? NAN : in->pts * av_q2d(inlink->time_base),
     fft->var_values[VAR_W] = inlink->w;
     fft->var_values[VAR_H] = inlink->h;
+#endif
 
-
-    color_decorrelation(fft->cbuf[0], fft->p_linesize, in->data, in->linesize, inlink->w, inlink->h);
+    color_decorrelation(fft->cbuf[0], fft->p_linesize, in->data[0], in->linesize[0], inlink->w, inlink->h);
     for (plane = 0; plane < 3; plane++)
-        filter_plane(ctx, fft->cbuf[1][order_map[plane]], fft->p_linesize,
-                          fft->cbuf[0][order_map[plane]], fft->p_linesize,
+        filter_plane(ctx, fft->cbuf[1][plane], fft->p_linesize,
+                          fft->cbuf[0][plane], fft->p_linesize,
                           inlink->w, inlink->h);
-    color_correlation(in->data, in->linesize, fft->cbuf[1], fft->p_linesize, inlink->w, inlink->h);
+    color_correlation(out->data[0], out->linesize[0], fft->cbuf[1], fft->p_linesize, inlink->w, inlink->h);
 
-    //av_frame_free(&in);
-    //av_frame_free(&out);
+    if (!direct)
+        av_frame_free(&in);
 
-    return ff_filter_frame(outlink, in);
-    //return ff_filter_frame(outlink, out);
+    return ff_filter_frame(outlink, out);
 }
 
 static av_cold void uninit(AVFilterContext *ctx)
 {
     FFTFilterContext *fft = ctx->priv;
-    ff_fft2d_end(fft->blockfft);
+
+    av_dct_end(fft->dct);
+    av_dct_end(fft->idct);
+    av_free(fft->block);
+    av_free(fft->tmp_block);
+    //av_free(bctx->win_fn);
 }
 
 static const AVFilterPad fft_inputs[] = {
@@ -353,7 +480,6 @@ static const AVFilterPad fft_inputs[] = {
         .type         = AVMEDIA_TYPE_VIDEO,
         .filter_frame = filter_frame,
         .config_props = config_input,
-        .needs_writable = 1,
      },
      { NULL }
 };
