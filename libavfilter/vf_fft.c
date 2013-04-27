@@ -462,13 +462,22 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
 
 static av_cold void uninit(AVFilterContext *ctx)
 {
+    int i;
     FFTFilterContext *fft = ctx->priv;
 
     av_dct_end(fft->dct);
     av_dct_end(fft->idct);
     av_free(fft->block);
     av_free(fft->tmp_block);
-    //av_free(bctx->win_fn);
+    av_free(fft->weights);
+    for (i = 0; i < 2; i++) {
+        av_free(fft->cbuf[i][0]);
+        av_free(fft->cbuf[i][1]);
+        av_free(fft->cbuf[i][2]);
+    }
+#if WINDOWING
+    av_free(bctx->win_fn);
+#endif
 }
 
 static const AVFilterPad fft_inputs[] = {
