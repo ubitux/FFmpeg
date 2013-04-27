@@ -29,7 +29,6 @@
 #define WINDOWING 0
 #define DBG_F     0
 #define DBG_B     0
-#define NORM      1
 
 static const char *const var_names[] = { "c", NULL };
 enum { VAR_C, VAR_VARS_NB };
@@ -101,9 +100,7 @@ static float *dct_block(FFTFilterContext *ctx, const float *src, int src_linesiz
 
         column = ctx->tmp_block + y;
         for (x = 0; x < BSIZE; x++) {
-#if NORM
             *line *= x == 0 ? 1. / sqrt(BSIZE) : sqrt(2. / BSIZE);
-#endif
             *column = *line++;
             column += BSIZE;
         }
@@ -118,10 +115,8 @@ static float *dct_block(FFTFilterContext *ctx, const float *src, int src_linesiz
     column = ctx->tmp_block;
     for (x = 0; x < BSIZE; x++) {
         av_dct_calc(ctx->dct, column);
-#if NORM
         for (y = 0; y < BSIZE; y++)
             column[y] *= y == 0 ? 1. / sqrt(BSIZE) : sqrt(2. / BSIZE);
-#endif
         column += BSIZE;
     }
 
@@ -159,10 +154,8 @@ static void idct_block(FFTFilterContext *ctx, float *dst, int dst_linesize)
         av_log(0,0,"\n");
 #endif
 
-#if NORM
         for (x = 0; x < BSIZE; x++)
             block[x] *= x == 0 ? sqrt(BSIZE) : 1./sqrt(2. / BSIZE);
-#endif
 
         av_dct_calc(ctx->idct, block);
 
@@ -180,9 +173,7 @@ static void idct_block(FFTFilterContext *ctx, float *dst, int dst_linesize)
     for (y = 0; y < BSIZE; y++) {
         for (x = 0; x < BSIZE; x++) {
             tmp[x] = block[x*BSIZE + y];
-#if NORM
             tmp[x] *= x == 0 ? sqrt(BSIZE) : 1./sqrt(2. / BSIZE);
-#endif
         }
 
 #if 0
@@ -274,9 +265,6 @@ static av_cold int init(AVFilterContext *ctx)
     }
 
     fft->th = fft->sigma * 3.;
-#if !NORM
-    fft->th *= (BSIZE / 2.);
-#endif
 
     fft->dct  = av_dct_init(NBITS, DCT_II);
     fft->idct = av_dct_init(NBITS, DCT_III);
