@@ -45,6 +45,8 @@ enum {
 };
 #endif
 
+#define WINDOWING 0
+
 typedef struct {
     const AVClass *class;
 #if 0
@@ -52,10 +54,6 @@ typedef struct {
     AVExpr *expr;
     double var_values[VAR_VARS_NB];
 #endif
-
-    //int nxbits, nybits;
-    //int bw, bh;
-    //void *blockfft;
 
     float sigma;
     float th;
@@ -65,9 +63,13 @@ typedef struct {
     float *weights;
 
     int nbits;
-    int bw, bh;
+    int bsize;
     DCTContext *dct, *idct;
     float *block, *tmp_block;
+
+#if WINDOWING
+    float *win_fn;
+#endif
 
 } FFTFilterContext;
 
@@ -85,30 +87,38 @@ static float *dct_block(FFTFilterContext *ctx, const float *src, int src_linesiz
 {
     int x, y;
     float *column;
+#if WINDOWING
+    const float *win_fn = ctx->win_fn;
+#endif
 
-    for (y = 0; y < ctx->bh; y++) {
+    for (y = 0; y < ctx->bsize; y++) {
         float *line = ctx->block;
 
-        memcpy(line, src, ctx->bw * sizeof(*line));
+#if WINDOWING
+        for (x = 0; x < ctx->bsize; x++)
+            line[x] = src[x] * *win_fn++;
+#else
+        memcpy(line, src, ctx->bsize * sizeof(*line));
+#endif
         src += src_linesize;
         av_dct_calc(ctx->dct, line);
 
         column = ctx->tmp_block + y;
-        for (x = 0; x < ctx->bw; x++) {
+        for (x = 0; x < ctx->bsize; x++) {
             *column = *line++;
-            column += ctx->bh;
+            column += ctx->bsize;
         }
     }
 
     column = ctx->tmp_block;
-    for (x = 0; x < ctx->bw; x++) {
+    for (x = 0; x < ctx->bsize; x++) {
         av_dct_calc(ctx->dct, column);
-        column += ctx->bh;
+        column += ctx->bsize;
     }
 
-    for (y = 0; y < ctx->bh; y++)
-        for (x = 0; x < ctx->bw; x++)
-            ctx->block[y*ctx->bw + x] = ctx->tmp_block[x*ctx->bh + y];
+    for (y = 0; y < ctx->bsize; y++)
+        for (x = 0; x < ctx->bsize; x++)
+            ctx->block[y*ctx->bsize + x] = ctx->tmp_block[x*ctx->bsize + y];
 
     return ctx->block;
 }
@@ -120,23 +130,23 @@ static void idct_block(FFTFilterContext *ctx, float *dst, int dst_linesize)
     int x, y;
     float *column = ctx->tmp_block;
 
-    for (y = 0; y < ctx->bh; y++)
-        for (x = 0; x < ctx->bw; x++)
-            ctx->tmp_block[x*ctx->bh + y] = ctx->block[y*ctx->bw + x];
+    for (y = 0; y < ctx->bsize; y++)
+        for (x = 0; x < ctx->bsize; x++)
+            ctx->tmp_block[x*ctx->bsize + y] = ctx->block[y*ctx->bsize + x];
 
-    for (x = 0; x < ctx->bw; x++) {
+    for (x = 0; x < ctx->bsize; x++) {
         av_dct_calc(ctx->idct, column);
-        column += ctx->bh;
+        column += ctx->bsize;
     }
 
-    for (y = 0; y < ctx->bh; y++) {
+    for (y = 0; y < ctx->bsize; y++) {
         float *line = ctx->block;
 
-        for (x = 0; x < ctx->bw; x++)
-            ctx->block[x] = ctx->tmp_block[x*ctx->bh + y];
+        for (x = 0; x < ctx->bsize; x++)
+            ctx->block[x] = ctx->tmp_block[x*ctx->bsize + y];
 
         av_dct_calc(ctx->idct, line);
-        for (x = 0; x < ctx->bw; x++)
+        for (x = 0; x < ctx->bsize; x++)
 #if WEIGHT
             dst[x] += line[x];
 #else
@@ -146,7 +156,7 @@ static void idct_block(FFTFilterContext *ctx, float *dst, int dst_linesize)
     }
 }
 
-#if 0
+#if WINDOWING
 static float *get_window_function(int w, int h)
 {
     int x, y;
@@ -159,7 +169,7 @@ static float *get_window_function(int w, int h)
 #define HANN(i, winsize) (.5f * (1 - cos(2*M_PI*(i) / ((winsize)-1))))
     for (y = 0; y < h; y++)
         for (x = 0; x < w; x++)
-            t[y*w + x] = HANN(x, w) * HANN(y, h) * scale;
+            t[y*w + x] = HANN(x, w) * HANN(y, h); // * scale;
     return t;
 }
 #endif
@@ -185,10 +195,10 @@ static int config_input(AVFilterLink *inlink)
     iweights = av_calloc(inlink->h, linesize * sizeof(*iweights));
     if (!iweights)
         return AVERROR(ENOMEM);
-    for (y = 0; y < inlink->h - fft->bh + 1; y++)
-        for (x = 0; x < inlink->w - fft->bw + 1; x++)
-            for (by = 0; by < fft->bh; by++)
-                for (bx = 0; bx < fft->bw; bx++)
+    for (y = 0; y < inlink->h - fft->bsize + 1; y++)
+        for (x = 0; x < inlink->w - fft->bsize + 1; x++)
+            for (by = 0; by < fft->bsize; by++)
+                for (bx = 0; bx < fft->bsize; bx++)
                     iweights[(y + by)*linesize + x + bx]++;
     for (y = 0; y < inlink->h; y++)
         for (x = 0; x < inlink->w; x++)
@@ -202,7 +212,6 @@ static av_cold int init(AVFilterContext *ctx)
 {
     //int ret;
     FFTFilterContext *fft = ctx->priv;
-    //float *win_fn;
 
 #if 0
     if (!fft->expr_str) {
@@ -216,35 +225,24 @@ static av_cold int init(AVFilterContext *ctx)
         return ret;
 #endif
 
-#if 0
-    // FIXME: make configurable
-    fft->nxbits = fft->nybits = 4;
-
-    fft->bh = 1 << fft->nxbits;
-    fft->bw = 1 << fft->nybits;
-
-    win_fn = get_window_function(fft->bw, fft->bh);
-    if (!win_fn)
-        return AVERROR(ENOMEM);
-
-    fft->blockfft = ff_fft2d_init(fft->nxbits, fft->nybits, NULL /*win_fn*/);
-    if (!fft->blockfft)
-        return AVERROR(ENOMEM);
-#endif
-
     fft->nbits = 4;
-    fft->bw = fft->bh = 1 << fft->nbits;
+    fft->bsize = 1 << fft->nbits;
 
     fft->dct  = av_dct_init(fft->nbits, DCT_II);
     fft->idct = av_dct_init(fft->nbits, DCT_III);
-    fft->block     = av_malloc(fft->bw * fft->bh * sizeof(*fft->block));
-    fft->tmp_block = av_malloc(fft->bh * fft->bw * sizeof(*fft->tmp_block));
+    fft->block     = av_malloc(fft->bsize * fft->bsize * sizeof(*fft->block));
+    fft->tmp_block = av_malloc(fft->bsize * fft->bsize * sizeof(*fft->tmp_block));
 
     if (!fft->dct || !fft->idct || !fft->tmp_block || !fft->block)
         return AVERROR(ENOMEM);
 
     fft->th = fft->sigma * 3.;
 
+#if WINDOWING
+    fft->win_fn = get_window_function(fft->bsize, fft->bsize);
+    if (!fft->win_fn)
+        return AVERROR(ENOMEM);
+#endif
     return 0;
 }
 
@@ -345,17 +343,17 @@ static void filter_plane(AVFilterContext *ctx,
     memset(dstp, 0, h*dst_linesize*sizeof(*dstp));
 #endif
 
-    for (y = 0; y < h - fft->bh + 1; y++) {
-        for (x = 0; x < w - fft->bw + 1; x++) {
+    for (y = 0; y < h - fft->bsize + 1; y++) {
+        for (x = 0; x < w - fft->bsize + 1; x++) {
             float *ftb = dct_block(fft, srcp + x, src_linesize);
 
             //av_log(0,0,"filter block at (%d,%d) of size (%d/2+1,%d)\n",
-            //       x, y, fft->bw, fft->bh);
+            //       x, y, fft->bsize, fft->bsize);
 
 #if DBG
             av_log(0,0,"INPUT:\n");
-            for (by = 0; by < fft->bh; by++) {
-                for (bx = 0; bx < fft->bw; bx++) {
+            for (by = 0; by < fft->bsize; by++) {
+                for (bx = 0; bx < fft->bsize; bx++) {
                     av_log(0,0," %10g", srcp[(y+by)*src_linesize + x+bx]);
                 }
                 av_log(0,0,"\n");
@@ -365,10 +363,10 @@ static void filter_plane(AVFilterContext *ctx,
             av_log(0,0,"OUTPUT:\n");
 #endif
 
-            for (by = 0; by < fft->bh; by++) {
-                //fft->var_values[VAR_Y] = by / (fft->bh - 1);
+            for (by = 0; by < fft->bsize; by++) {
+                //fft->var_values[VAR_Y] = by / (fft->bsize - 1);
 
-                for (bx = 0; bx < fft->bw; bx++) {
+                for (bx = 0; bx < fft->bsize; bx++) {
                     //double f;
 
 #if DBG
@@ -379,20 +377,14 @@ static void filter_plane(AVFilterContext *ctx,
                         *ftb = 0;
                     ftb++;
 
-                    //fft->var_values[VAR_X] = bx / (fft->bw/2);
+                    //fft->var_values[VAR_X] = bx / (fft->bsize/2);
                     //fft->var_values[VAR_RE]  = cplx->re;
                     //fft->var_values[VAR_IM]  = cplx->im;
                     //fft->var_values[VAR_PSD] = cplx->re*cplx->re + cplx->im*cplx->im + 1e-16;
-
                     //f = av_expr_eval(fft->expr, fft->var_values, fft);
-
                     //av_log(0,0,"psd=%f -> f=%f\n", fft->var_values[VAR_PSD], f);
-
                     //cplx->re *= f;
                     //cplx->im *= f;
-                    //cplx->re = FFABS(cplx->re / (fft->bw )) > f ? cplx->re : 0;
-                    //cplx->im = FFABS(cplx->im / (fft->bw )) > f ? cplx->im : 0;
-
                     //cplx++;
                 }
 #if DBG
