@@ -27,8 +27,6 @@
 #define BSIZE (1<<(NBITS))
 
 #define WINDOWING 0
-#define DBG_F     0
-#define DBG_B     0
 
 static const char *const var_names[] = { "c", NULL };
 enum { VAR_C, VAR_VARS_NB };
@@ -87,14 +85,6 @@ static float *dct_block(FFTFilterContext *ctx, const float *src, int src_linesiz
         memcpy(line, src, BSIZE * sizeof(*line));
 #endif
 
-#if DBG_F
-        av_log(0,0,"DCT 1D\n");
-        av_log(0,0,"IN: ");
-        for (x = 0; x < BSIZE; x++)
-            av_log(0,0," %10g", ctx->block[x]);
-        av_log(0,0,"\n");
-#endif
-
         src += src_linesize;
         av_dct_calc(ctx->dct, line);
 
@@ -104,12 +94,6 @@ static float *dct_block(FFTFilterContext *ctx, const float *src, int src_linesiz
             *column = *line++;
             column += BSIZE;
         }
-#if DBG_F
-        av_log(0,0,"OUT:");
-        for (x = 0; x < BSIZE; x++)
-            av_log(0,0," %10g", ctx->block[x]);
-        av_log(0,0,"\n");
-#endif
     }
 
     column = ctx->tmp_block;
@@ -133,39 +117,10 @@ static void idct_block(FFTFilterContext *ctx, float *dst, int dst_linesize)
     float *block = ctx->block;
     float *tmp = ctx->tmp_block;
 
-#if DBG_B
-    float *dst0 = dst;
-    av_log(0,0,"INPUT:\n");
     for (y = 0; y < BSIZE; y++) {
-        for (x = 0; x < BSIZE; x++)
-            av_log(0,0," %10g", ctx->block[y*BSIZE + x]);
-        av_log(0,0,"\n");
-    }
-    av_log(0,0,"\n");
-#endif
-
-    for (y = 0; y < BSIZE; y++) {
-
-#if 0
-        av_log(0,0,"IDCT 1D\n");
-        av_log(0,0,"IN: ");
-        for (x = 0; x < BSIZE; x++)
-            av_log(0,0," %10g", block[x]);
-        av_log(0,0,"\n");
-#endif
-
         for (x = 0; x < BSIZE; x++)
             block[x] *= x == 0 ? sqrt(BSIZE) : 1./sqrt(2. / BSIZE);
-
         av_dct_calc(ctx->idct, block);
-
-#if 0
-        av_log(0,0,"OUT:");
-        for (x = 0; x < BSIZE; x++)
-            av_log(0,0," %10g", block[x]);
-        av_log(0,0,"\n");
-#endif
-
         block += BSIZE;
     }
 
@@ -175,30 +130,10 @@ static void idct_block(FFTFilterContext *ctx, float *dst, int dst_linesize)
             tmp[x] = block[x*BSIZE + y];
             tmp[x] *= x == 0 ? sqrt(BSIZE) : 1./sqrt(2. / BSIZE);
         }
-
-#if 0
-        av_log(0,0,"IDCT 1D\n");
-        av_log(0,0,"IN: ");
-        for (x = 0; x < BSIZE; x++)
-            av_log(0,0," %10g", block[x]);
-        av_log(0,0,"\n");
-#endif
-
         av_dct_calc(ctx->idct, tmp);
         for (x = 0; x < BSIZE; x++)
             dst[x*dst_linesize + y] += tmp[x];
     }
-
-#if DBG_B
-    dst = dst0;
-    av_log(0,0,"OUTPUT:\n");
-    for (y = 0; y < BSIZE; y++) {
-        for (x = 0; x < BSIZE; x++)
-            av_log(0,0," %10g", dst[y*dst_linesize + x]);
-        av_log(0,0,"\n");
-    }
-    av_log(0,0,"\n");
-#endif
 }
 
 #if WINDOWING
@@ -358,7 +293,6 @@ static void filter_plane(AVFilterContext *ctx,
 {
     int x, y, bx, by;
     FFTFilterContext *fft = ctx->priv;
-    const float *src0 = src;
     float *dst0 = dst;
     const float *weights = fft->weights;
 
@@ -367,22 +301,6 @@ static void filter_plane(AVFilterContext *ctx,
     for (y = 0; y < h - BSIZE + 1; y += fft->step) {
         for (x = 0; x < w - BSIZE + 1; x += fft->step) {
             float *ftb = dct_block(fft, src + x, src_linesize);
-#if DBG_F
-            av_log(0,0,"INPUT:\n");
-            for (by = 0; by < BSIZE; by++) {
-                for (bx = 0; bx < BSIZE; bx++)
-                    av_log(0,0," %10g", src0[(y+by)*src_linesize + x+bx]);
-                av_log(0,0,"\n");
-            }
-            av_log(0,0,"\n");
-            av_log(0,0,"OUTPUT:\n");
-            for (by = 0; by < BSIZE; by++) {
-                for (bx = 0; bx < BSIZE; bx++)
-                    av_log(0,0," %10g", ftb[by*BSIZE + bx]);
-                av_log(0,0,"\n");
-            }
-            av_log(0,0,"\n");
-#endif
 
             if (fft->expr) {
                 for (by = 0; by < BSIZE; by++) {
