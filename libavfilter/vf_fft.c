@@ -28,7 +28,7 @@
 
 #define WINDOWING 0
 #define WEIGHT    1
-#define EXPR      0
+#define EXPR      1
 
 #if EXPR
 static const char *const var_names[] = { "psd", NULL };
@@ -217,7 +217,7 @@ static av_cold int init(AVFilterContext *ctx)
         return ret;
 #else
     fft->th = fft->sigma * 3.;
-    fft->th *= (float)BSIZE; // FIXME: shouldn't be necessary...
+    fft->th *= (BSIZE / 2.); // FIXME: shouldn't be necessary...
 #endif
 
     fft->dct  = av_dct_init(NBITS, DCT_II);
@@ -343,7 +343,7 @@ static void filter_plane(AVFilterContext *ctx,
             for (by = 0; by < BSIZE; by++) {
                 for (bx = 0; bx < BSIZE; bx++) {
 #if EXPR
-                    fft->var_values[VAR_PSD] = FFABS(*ftb); // / (3. * BSIZE);
+                    fft->var_values[VAR_PSD] = FFABS(*ftb) * (1 / (3. * BSIZE / 2.));
                     *ftb *= av_expr_eval(fft->expr, fft->var_values, fft);
 #else
                     if (FFABS(*ftb) < fft->th)
