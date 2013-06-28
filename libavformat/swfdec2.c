@@ -255,6 +255,8 @@ typedef struct {
 
     struct swf_disp_entry *display_list;
     int disp_nb_entries;
+
+    int video_pkt_size;
 } SWFDecContext;
 
 static void parse_audio_specs(struct audio_specs *specs, uint8_t audio_info)

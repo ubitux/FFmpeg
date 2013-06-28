@@ -119,8 +119,10 @@ enum {
 #define BITMAP_ID 0
 #define VIDEO_ID 0
 #define SHAPE_ID  1
+#define AUDIO_ID 2
 
 typedef struct SWFContext {
+    const AVClass *class;
     int64_t duration_pos;
     int64_t tag_pos;
     int64_t vframes_pos;
@@ -130,6 +132,8 @@ typedef struct SWFContext {
     int video_frame_number;
     int frame_rate;
     int tag;
+    int aloop_count;
+    int64_t aloop_off;
     AVFifoBuffer *audio_fifo;
     AVCodecContext *audio_enc, *video_enc;
 #if CONFIG_ZLIB

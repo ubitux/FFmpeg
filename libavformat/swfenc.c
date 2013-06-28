@@ -22,6 +22,7 @@
 
 #include "libavcodec/put_bits.h"
 #include "libavutil/avassert.h"
+#include "libavutil/opt.h"
 #include "avformat.h"
 #include "swf.h"
 
@@ -309,7 +310,9 @@ static int swf_write_header(AVFormatContext *s)
         put_swf_end_tag(s);
     }
 
-    if (swf->audio_enc && swf->audio_enc->codec_id == AV_CODEC_ID_MP3) {
+    if (swf->aloop_count)
+        swf->aloop_off = avio_tell(s->pb);
+    if (swf->audio_enc && swf->audio_enc->codec_id == AV_CODEC_ID_MP3 && !swf->aloop_count) {
         int v = 0;
 
         /* start sound */
@@ -425,7 +428,7 @@ static int swf_write_video(AVFormatContext *s,
     swf->swf_frame_number++;
 
     /* streaming sound always should be placed just before showframe tags */
-    if (swf->audio_enc && av_fifo_size(swf->audio_fifo)) {
+    if (swf->audio_enc && av_fifo_size(swf->audio_fifo) && !swf->aloop_count) {
         int frame_size = av_fifo_size(swf->audio_fifo);
         put_swf_tag(s, TAG_STREAMBLOCK | TAG_LONG);
         avio_wl16(pb, swf->sound_samples);
@@ -454,8 +457,12 @@ static int swf_write_audio(AVFormatContext *s,
         av_log(enc, AV_LOG_INFO, "warning: Flash Player limit of 16000 frames reached\n");
 
     if (av_fifo_size(swf->audio_fifo) + size > AUDIO_FIFO_SIZE) {
+        if (!swf->aloop_count) {
         av_log(s, AV_LOG_ERROR, "audio fifo too small to mux audio essence\n");
         return -1;
+        } else {
+            av_fifo_grow(swf->audio_fifo, size);
+        }
     }
 
     av_fifo_generic_write(swf->audio_fifo, buf, size, NULL);
@@ -477,12 +484,117 @@ static int swf_write_packet(AVFormatContext *s, AVPacket *pkt)
         return swf_write_video(s, codec, pkt->data, pkt->size);
 }
 
+static int shift_data(AVFormatContext *s, int size, int64_t off_start)
+{
+    int ret = 0;
+    int64_t pos, pos_end = avio_tell(s->pb);
+    uint8_t *buf, *read_buf[2];
+    int read_buf_id = 0;
+    int read_size[2];
+    AVIOContext *read_pb;
+
+    if (!s->pb->seekable)
+        return -1;
+
+    buf = av_malloc(size * 2);
+    if (!buf)
+        return AVERROR(ENOMEM);
+    read_buf[0] = buf;
+    read_buf[1] = buf + size;
+
+    /* Shift the data: the AVIO context of the output can only be used for
+     * writing, so we re-open the same output, but for reading. It also avoids
+     * a read/seek/write/seek back and forth. */
+    avio_flush(s->pb);
+    ret = avio_open(&read_pb, s->filename, AVIO_FLAG_READ);
+    if (ret < 0) {
+        av_log(s, AV_LOG_ERROR, "Unable to re-open %s output file for "
+               "the second pass (faststart)\n", s->filename);
+        goto end;
+    }
+
+    /* mark the end of the shift to up to the last data we wrote, and get ready
+     * for writing */
+    pos_end = avio_tell(s->pb);
+    avio_seek(s->pb, off_start + size, SEEK_SET);
+
+    /* start reading at where the new moov will be placed */
+    avio_seek(read_pb, off_start, SEEK_SET);
+    pos = avio_tell(read_pb);
+
+#define READ_BLOCK do {                                                             \
+    read_size[read_buf_id] = avio_read(read_pb, read_buf[read_buf_id], size);       \
+    read_buf_id ^= 1;                                                               \
+} while (0)
+
+    /* shift data by chunk of at most size */
+    READ_BLOCK;
+    do {
+        int n;
+        READ_BLOCK;
+        n = read_size[read_buf_id];
+        if (n <= 0)
+            break;
+        avio_write(s->pb, read_buf[read_buf_id], n);
+        pos += n;
+    } while (pos < pos_end);
+    avio_close(read_pb);
+
+end:
+    av_free(buf);
+    return ret;
+}
+
 static int swf_write_trailer(AVFormatContext *s)
 {
     SWFContext *swf = s->priv_data;
     AVIOContext *pb = s->pb;
     AVCodecContext *enc, *video_enc;
-    int file_size, i;
+    int file_size, i, shift = 0;
+
+    if (swf->audio_enc && av_fifo_size(swf->audio_fifo) && swf->aloop_count) {
+        const int64_t pos = avio_tell(pb);
+        const int frame_size = av_fifo_size(swf->audio_fifo);
+
+        shift = 2+4 + 2+1+4+2 + frame_size + 2+2+1+2;
+
+        if (!shift_data(s, shift, swf->aloop_off)) {
+            int v = 0;
+
+            avio_seek(pb, swf->aloop_off, SEEK_SET);
+
+            switch (swf->audio_enc->sample_rate) {
+            case 11025: v |= 1 << 2; break;
+            case 22050: v |= 2 << 2; break;
+            case 44100: v |= 3 << 2; break;
+            default:
+                /* not supported */
+                av_log(s, AV_LOG_ERROR, "swf does not support that sample rate, "
+                       "choose from (44100, 22050, 11025).\n");
+                return -1;
+            }
+            v |= 0x02; /* 16 bit playback */
+            if (swf->audio_enc->channels == 2)
+                v |= 0x01; /* stereo playback */
+            v |= 0x20; /* mp3 compressed */
+
+            put_swf_tag(s, TAG_DEFINESOUND | TAG_LONG);
+            avio_wl16(pb, AUDIO_ID);
+            avio_w8(pb, v);
+            avio_wl32(pb, swf->sound_samples);
+            avio_wl16(pb, 0); // skip samples
+            av_fifo_generic_read(swf->audio_fifo, pb, frame_size, (void*)avio_write);
+            put_swf_end_tag(s);
+
+            put_swf_tag(s, TAG_STARTSOUND);
+            avio_wl16(pb, AUDIO_ID);
+            avio_w8(pb, 1<<4 | 1<<2); // if not already playing + has loop
+            avio_wl16(pb, swf->aloop_count);
+            put_swf_end_tag(s);
+
+            avio_seek(s->pb, shift + pos, SEEK_SET);
+        }
+    }
 
     video_enc = NULL;
     for(i=0;i<s->nb_streams;i++) {
@@ -506,7 +618,7 @@ static int swf_write_trailer(AVFormatContext *s)
         avio_seek(pb, swf->duration_pos, SEEK_SET);
         avio_wl16(pb, swf->video_frame_number);
         if (swf->vframes_pos) {
-        avio_seek(pb, swf->vframes_pos, SEEK_SET);
+        avio_seek(pb, shift + swf->vframes_pos, SEEK_SET);
         avio_wl16(pb, swf->video_frame_number);
         }
         avio_seek(pb, file_size, SEEK_SET);
@@ -514,7 +626,21 @@ static int swf_write_trailer(AVFormatContext *s)
     return 0;
 }
 
+static const AVOption options[] = {
+    { "aloop", "set audio looping count", offsetof(SWFContext, aloop_count), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 0x7fff, AV_OPT_FLAG_AUDIO_PARAM|AV_OPT_FLAG_ENCODING_PARAM},
+    { NULL }
+};
+
+#define SWF_CLASS(flavor) \
+static const AVClass flavor ## _muxer_class = {     \
+    .class_name = #flavor " muxer",                 \
+    .item_name  = av_default_item_name,             \
+    .option     = options,                          \
+    .version    = LIBAVUTIL_VERSION_INT,            \
+}
+
 #if CONFIG_SWF_MUXER
+SWF_CLASS(swf);
 AVOutputFormat ff_swf_muxer = {
     .name              = "swf",
     .long_name         = NULL_IF_CONFIG_SMALL("SWF (ShockWave Flash)"),
@@ -527,9 +653,11 @@ AVOutputFormat ff_swf_muxer = {
     .write_packet      = swf_write_packet,
     .write_trailer     = swf_write_trailer,
     .flags             = AVFMT_TS_NONSTRICT,
+    .priv_class        = &swf_muxer_class,
 };
 #endif
 #if CONFIG_AVM2_MUXER
+SWF_CLASS(avm2);
 AVOutputFormat ff_avm2_muxer = {
     .name              = "avm2",
     .long_name         = NULL_IF_CONFIG_SMALL("SWF (ShockWave Flash) (AVM2)"),
@@ -541,5 +669,6 @@ AVOutputFormat ff_avm2_muxer = {
     .write_packet      = swf_write_packet,
     .write_trailer     = swf_write_trailer,
     .flags             = AVFMT_TS_NONSTRICT,
+    .priv_class        = &avm2_muxer_class,
 };
 #endif
