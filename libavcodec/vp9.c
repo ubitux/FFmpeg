@@ -1378,31 +1378,50 @@ static void decode_mode(AVCodecContext *ctx)
                 b->comp = s->comppredmode == PRED_COMPREF;
             } else {
                 int c;
-
-                // FIXME add intra as ref=0xff (or -1) to make these easier?
-                if (have_a) {
-                    if (have_l) {
-                        if (s->above_comp_ctx[col] && s->left_comp_ctx[row7]) {
-                            c = 4;
-                        } else if (s->above_comp_ctx[col]) {
-                            c = 2 + (s->left_intra_ctx[row7] ||
-                                     s->left_ref_ctx[row7] == s->fixcompref);
-                        } else if (s->left_comp_ctx[row7]) {
-                            c = 2 + (s->above_intra_ctx[col] ||
-                                     s->above_ref_ctx[col] == s->fixcompref);
-                        } else {
-                            c = (!s->above_intra_ctx[col] &&
-                                 s->above_ref_ctx[col] == s->fixcompref) ^
-                            (!s->left_intra_ctx[row7] &&
-                             s->left_ref_ctx[row & 7] == s->fixcompref);
-                        }
-                    } else {
-                        c = s->above_comp_ctx[col] ? 3 :
-                        (!s->above_intra_ctx[col] && s->above_ref_ctx[col] == s->fixcompref);
-                    }
+                static const uint8_t c_above_and_left_2ref_lut_p1[3][2][2][4][4] = {
+                    {
+                        {
+                            {{0, 1, 0, 0}, {1, 0, 1, 1}, {0, 1, 0, 0}, {0, 1, 0, 0}},
+                            {{3, 3, 3, 3}, {3, 3, 3, 3}, {2, 2, 2, 2}, {2, 2, 2, 2}},
+                        },{
+                            {{3, 3, 2, 2}, {3, 3, 2, 2}, {3, 3, 2, 2}, {3, 3, 2, 2}},
+                            {{4, 4, 4, 4}, {4, 4, 4, 4}, {4, 4, 4, 4}, {4, 4, 4, 4}},
+                        },
+                    },{
+                        {
+                            {{0, 0, 1, 0}, {0, 0, 1, 0}, {1, 1, 0, 1}, {0, 0, 1, 0}},
+                            {{3, 3, 3, 3}, {2, 2, 2, 2}, {3, 3, 3, 3}, {2, 2, 2, 2}},
+                        },{
+                            {{3, 2, 3, 2}, {3, 2, 3, 2}, {3, 2, 3, 2}, {3, 2, 3, 2}},
+                            {{4, 4, 4, 4}, {4, 4, 4, 4}, {4, 4, 4, 4}, {4, 4, 4, 4}},
+                        },
+                    },{
+                        {
+                            {{0, 0, 0, 1}, {0, 0, 0, 1}, {0, 0, 0, 1}, {1, 1, 1, 0}},
+                            {{3, 3, 3, 3}, {2, 2, 2, 2}, {2, 2, 2, 2}, {3, 3, 3, 3}},
+                        },{
+                            {{3, 2, 2, 3}, {3, 2, 2, 3}, {3, 2, 2, 3}, {3, 2, 2, 3}},
+                            {{4, 4, 4, 4}, {4, 4, 4, 4}, {4, 4, 4, 4}, {4, 4, 4, 4}},
+                        },
+                    },
+                };
+                static const uint8_t c_above_xor_left_2ref_lut_p1[3][2][4] = {
+                    {{0, 1, 0, 0}, {3, 3, 3, 3}}, {{0, 0, 1, 0}, {3, 3, 3, 3}},
+                    {{0, 0, 0, 1}, {3, 3, 3, 3}},
+                };
+                if (have_a && have_l) {
+                    const int ref_l  = s->left_intra_ctx[row7] ? 0 : s->left_ref_ctx[row7] + 1,
+                              ref_a  = s->above_intra_ctx[col] ? 0 : s->above_ref_ctx[col] + 1,
+                              comp_l = s->left_comp_ctx[row7], comp_a = s->above_comp_ctx[col];
+                    c = c_above_and_left_2ref_lut_p1[s->fixcompref][comp_l][comp_a][ref_l][ref_a];
+                } else if (have_a) {
+                    const int ref_a  = s->above_intra_ctx[col] ? 0 : s->above_ref_ctx[col] + 1,
+                              comp_a = s->above_comp_ctx[col];
+                    c = c_above_xor_left_2ref_lut_p1[s->fixcompref][comp_a][ref_a];
                 } else if (have_l) {
-                    c = s->left_comp_ctx[row7] ? 3 :
-                    (!s->left_intra_ctx[row7] && s->left_ref_ctx[row7] == s->fixcompref);
+                    const int ref_l  = s->left_intra_ctx[row7] ? 0 : s->left_ref_ctx[row7] + 1,
+                              comp_l = s->left_comp_ctx[row7];
+                    c = c_above_xor_left_2ref_lut_p1[s->fixcompref][comp_l][ref_l];
                 } else {
                     c = 1;
                 }
@@ -1411,70 +1430,63 @@ static void decode_mode(AVCodecContext *ctx)
             }
 
             // read actual references
-            // FIXME probably cache a few variables here to prevent repetitive
-            // memory accesses below
             if (b->comp) /* two references */ {
+                static const uint8_t c_above_and_left_2ref_lut_p2[32][32] = {
+                    {3,1,1,1,1,1,1,1,4,4,1,1,4,4,1,1,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3},
+                    {1,3,1,1,4,4,4,4,4,4,1,1,4,4,1,1,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3},
+                    {1,1,0,1,1,1,1,1,2,2,0,4,2,2,4,4,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
+                    {1,1,1,0,4,4,4,4,2,2,4,0,2,2,4,4,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
+                    {1,4,1,4,3,4,1,4,4,4,1,1,4,4,1,1,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3},
+                    {1,4,1,4,4,4,4,4,4,4,1,1,4,4,1,1,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3},
+                    {1,4,1,4,1,4,0,4,2,2,4,4,2,2,0,4,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
+                    {1,4,1,4,4,4,4,0,2,2,4,4,2,2,4,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
+                    {4,4,2,2,4,4,2,2,4,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3},
+                    {4,4,2,2,4,4,2,2,2,4,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3},
+                    {1,1,0,4,1,1,4,4,2,2,0,2,2,2,2,2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
+                    {1,1,4,0,1,1,4,4,2,2,2,0,2,2,2,2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
+                    {4,4,2,2,4,4,2,2,2,2,2,2,4,2,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3},
+                    {4,4,2,2,4,4,2,2,2,2,2,2,2,4,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3},
+                    {1,1,4,4,1,1,0,4,2,2,2,2,2,2,0,2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
+                    {1,1,4,4,1,1,4,0,2,2,2,2,2,2,2,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
+                    {3,3,1,1,3,3,1,1,3,3,1,1,3,3,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2},
+                    {3,3,1,1,3,3,1,1,3,3,1,1,3,3,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2},
+                    {3,3,1,1,3,3,1,1,3,3,1,1,3,3,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2},
+                    {3,3,1,1,3,3,1,1,3,3,1,1,3,3,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2},
+                    {3,3,1,1,3,3,1,1,3,3,1,1,3,3,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2},
+                    {3,3,1,1,3,3,1,1,3,3,1,1,3,3,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2},
+                    {3,3,1,1,3,3,1,1,3,3,1,1,3,3,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2},
+                    {3,3,1,1,3,3,1,1,3,3,1,1,3,3,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2},
+                    {3,3,1,1,3,3,1,1,3,3,1,1,3,3,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2},
+                    {3,3,1,1,3,3,1,1,3,3,1,1,3,3,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2},
+                    {3,3,1,1,3,3,1,1,3,3,1,1,3,3,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2},
+                    {3,3,1,1,3,3,1,1,3,3,1,1,3,3,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2},
+                    {3,3,1,1,3,3,1,1,3,3,1,1,3,3,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2},
+                    {3,3,1,1,3,3,1,1,3,3,1,1,3,3,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2},
+                    {3,3,1,1,3,3,1,1,3,3,1,1,3,3,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2},
+                    {3,3,1,1,3,3,1,1,3,3,1,1,3,3,1,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2},
+                };
+                static const uint8_t c_above_xor_left_2ref_lut_p2[3][2][4] = {
+                    {{2, 0, 3, 3}, {2, 0, 4, 4}}, {{2, 3, 0, 3}, {2, 4, 0, 4}},
+                    {{2, 3, 3, 0}, {2, 4, 4, 0}},
+                };
                 int fix_idx = s->signbias[s->fixcompref], var_idx = !fix_idx, c, bit;
 
                 b->ref[fix_idx] = s->fixcompref;
-                // FIXME can this codeblob be replaced by some sort of LUT?
-                if (have_a) {
-                    if (have_l) {
-                        if (s->above_intra_ctx[col]) {
-                            if (s->left_intra_ctx[row7]) {
-                                c = 2;
-                            } else {
-                                c = 1 + 2 * (s->left_ref_ctx[row7] != s->varcompref[1]);
-                            }
-                        } else if (s->left_intra_ctx[row7]) {
-                            c = 1 + 2 * (s->above_ref_ctx[col] != s->varcompref[1]);
-                        } else {
-                            int refl = s->left_ref_ctx[row7], refa = s->above_ref_ctx[col];
 
-                            if (refl == refa && refa == s->varcompref[1]) {
-                                c = 0;
-                            } else if (!s->left_comp_ctx[row7] && !s->above_comp_ctx[col]) {
-                                if ((refa == s->fixcompref && refl == s->varcompref[0]) ||
-                                    (refl == s->fixcompref && refa == s->varcompref[0])) {
-                                    c = 4;
-                                } else {
-                                    c = (refa == refl) ? 3 : 1;
-                                }
-                            } else if (!s->left_comp_ctx[row7]) {
-                                if (refa == s->varcompref[1] && refl != s->varcompref[1]) {
-                                    c = 1;
-                                } else {
-                                    c = (refl == s->varcompref[1] &&
-                                         refa != s->varcompref[1]) ? 2 : 4;
-                                }
-                            } else if (!s->above_comp_ctx[col]) {
-                                if (refl == s->varcompref[1] && refa != s->varcompref[1]) {
-                                    c = 1;
-                                } else {
-                                    c = (refa == s->varcompref[1] &&
-                                         refl != s->varcompref[1]) ? 2 : 4;
-                                }
-                            } else {
-                                c = (refl == refa) ? 4 : 2;
-                            }
-                        }
-                    } else {
-                        if (s->above_intra_ctx[col]) {
-                            c = 2;
-                        } else if (s->above_comp_ctx[col]) {
-                            c = 4 * (s->above_ref_ctx[col] != s->varcompref[1]);
-                        } else {
-                            c = 3 * (s->above_ref_ctx[col] != s->varcompref[1]);
-                        }
-                    }
+                if (have_a && have_l) {
+                    const int lref = s->left_ref_ctx[row7], aref = s->above_ref_ctx[col];
+                    const int vcr0 = s->varcompref[0], vcr1 = s->varcompref[1], fcr = s->fixcompref;
+                    const int lr_mask = s->left_intra_ctx[row7]<<4 | s->left_comp_ctx[row7]<<3
+                                      | (lref == fcr)<<2 | (lref == vcr1)<<1 | (lref == vcr0);
+                    const int ar_mask = s->above_intra_ctx[col]<<4 | s->above_comp_ctx[col]<<3
+                                      | (aref == fcr)<<2 | (aref == vcr1)<<1 | (aref == vcr0);
+                    c = c_above_and_left_2ref_lut_p2[lr_mask][ar_mask];
+                } else if (have_a) {
+                    const int ref_a = s->above_intra_ctx[col] ? 0 : s->above_ref_ctx[col] + 1;
+                    c = c_above_xor_left_2ref_lut_p2[s->varcompref[1]][s->above_comp_ctx[col]][ref_a];
                 } else if (have_l) {
-                    if (s->left_intra_ctx[row7]) {
-                        c = 2;
-                    } else if (s->left_comp_ctx[row7]) {
-                        c = 4 * (s->left_ref_ctx[row7] != s->varcompref[1]);
-                    } else {
-                        c = 3 * (s->left_ref_ctx[row7] != s->varcompref[1]);
-                    }
+                    const int ref_l = s->left_intra_ctx[row7] ? 0 : s->left_ref_ctx[row7] + 1;
+                    c = c_above_xor_left_2ref_lut_p2[s->varcompref[1]][s->left_comp_ctx[row7]][ref_l];
                 } else {
                     c = 2;
                 }
@@ -1483,38 +1495,38 @@ static void decode_mode(AVCodecContext *ctx)
                 s->counts.comp_ref[c][bit]++;
             } else /* single reference */ {
                 int bit, c;
-
-                if (have_a && !s->above_intra_ctx[col]) {
-                    if (have_l && !s->left_intra_ctx[row7]) {
-                        if (s->left_comp_ctx[row7]) {
-                            if (s->above_comp_ctx[col]) {
-                                c = 1 + (!s->fixcompref || !s->left_ref_ctx[row7] ||
-                                         !s->above_ref_ctx[col]);
-                            } else {
-                                c = (3 * !s->above_ref_ctx[col]) +
-                                    (!s->fixcompref || !s->left_ref_ctx[row7]);
-                            }
-                        } else if (s->above_comp_ctx[col]) {
-                            c = (3 * !s->left_ref_ctx[row7]) +
-                                (!s->fixcompref || !s->above_ref_ctx[col]);
-                        } else {
-                            c = 2 * !s->left_ref_ctx[row7] + 2 * !s->above_ref_ctx[col];
-                        }
-                    } else if (s->above_intra_ctx[col]) {
-                        c = 2;
-                    } else if (s->above_comp_ctx[col]) {
-                        c = 1 + (!s->fixcompref || !s->above_ref_ctx[col]);
-                    } else {
-                        c = 4 * (!s->above_ref_ctx[col]);
-                    }
-                } else if (have_l && !s->left_intra_ctx[row7]) {
-                    if (s->left_intra_ctx[row7]) {
-                        c = 2;
-                    } else if (s->left_comp_ctx[row7]) {
-                        c = 1 + (!s->fixcompref || !s->left_ref_ctx[row7]);
-                    } else {
-                        c = 4 * (!s->left_ref_ctx[row7]);
-                    }
+                static const uint8_t c_above_and_left_1ref_lut_p1[3][3][4][4] = {
+                    {
+                        {{2, 4, 0, 0}, {4, 4, 2, 2}, {0, 2, 0, 0}, {0, 2, 0, 0}},
+                        {{2, 2, 1, 1}, {4, 4, 3, 3}, {0, 1, 0, 0}, {0, 1, 0, 0}},
+                        {{2, 2, 2, 2}, {4, 4, 4, 4}, {0, 1, 1, 1}, {0, 1, 1, 1}},
+                    },{
+                        {{2, 4, 0, 0}, {2, 4, 1, 1}, {1, 3, 0, 0}, {1, 3, 0, 0}},
+                        {{2, 2, 1, 1}, {2, 2, 2, 2}, {1, 2, 1, 1}, {1, 2, 1, 1}},
+                        {{2, 2, 2, 2}, {2, 2, 2, 2}, {2, 2, 2, 2}, {2, 2, 2, 2}},
+                    },{
+                        {{2, 4, 0, 0}, {2, 4, 1, 1}, {2, 4, 1, 1}, {2, 4, 1, 1}},
+                        {{2, 2, 2, 2}, {2, 2, 2, 2}, {2, 2, 2, 2}, {2, 2, 2, 2}},
+                        {{2, 2, 2, 2}, {2, 2, 2, 2}, {2, 2, 2, 2}, {2, 2, 2, 2}},
+                    },
+                };
+                static const uint8_t c_above_xor_left_1ref_lut_p1[3][4] = {
+                    {2, 4, 0, 0}, {2, 2, 1, 1}, {2, 2, 2, 2}
+                };
+                if (have_a && have_l) {
+                    const int ref_l  = s->left_intra_ctx[row7] ? 0 : s->left_ref_ctx[row7] + 1,
+                              ref_a  = s->above_intra_ctx[col] ? 0 : s->above_ref_ctx[col] + 1,
+                              comp_l = s->left_comp_ctx[row7] ? (!s->fixcompref) + 1 : 0,
+                              comp_a = s->above_comp_ctx[col] ? (!s->fixcompref) + 1 : 0;
+                    c = c_above_and_left_1ref_lut_p1[comp_l][comp_a][ref_l][ref_a];
+                } else if (have_a) {
+                    const int ref_a  = s->above_intra_ctx[col] ? 0 : s->above_ref_ctx[col] + 1,
+                              comp_a = s->above_comp_ctx[col] ? (!s->fixcompref) + 1 : 0;
+                    c = c_above_xor_left_1ref_lut_p1[comp_a][ref_a];
+                } else if (have_l) {
+                    const int ref_l  = s->left_intra_ctx[row7] ? 0 : s->left_ref_ctx[row7] + 1,
+                              comp_l = s->left_comp_ctx[row7] ? (!s->fixcompref) + 1 : 0;
+                    c = c_above_xor_left_1ref_lut_p1[comp_l][ref_l];
                 } else {
                     c = 2;
                 }
@@ -1523,85 +1535,39 @@ static void decode_mode(AVCodecContext *ctx)
                 if (!bit) {
                     b->ref[0] = 0;
                 } else {
-                    // FIXME can this codeblob be replaced by some sort of LUT?
-                    if (have_a) {
-                        if (have_l) {
-                            if (s->left_intra_ctx[row7]) {
-                                if (s->above_intra_ctx[col]) {
-                                    c = 2;
-                                } else if (s->above_comp_ctx[col]) {
-                                    c = 1 + 2 * (s->fixcompref == 1 ||
-                                                 s->above_ref_ctx[col] == 1);
-                                } else if (!s->above_ref_ctx[col]) {
-                                    c = 3;
-                                } else {
-                                    c = 4 * (s->above_ref_ctx[col] == 1);
-                                }
-                            } else if (s->above_intra_ctx[col]) {
-                                if (s->left_intra_ctx[row7]) {
-                                    c = 2;
-                                } else if (s->left_comp_ctx[row7]) {
-                                    c = 1 + 2 * (s->fixcompref == 1 ||
-                                                 s->left_ref_ctx[row7] == 1);
-                                } else if (!s->left_ref_ctx[row7]) {
-                                    c = 3;
-                                } else {
-                                    c = 4 * (s->left_ref_ctx[row7] == 1);
-                                }
-                            } else if (s->above_comp_ctx[col]) {
-                                if (s->left_comp_ctx[row7]) {
-                                    if (s->left_ref_ctx[row7] == s->above_ref_ctx[col]) {
-                                        c = 3 * (s->fixcompref == 1 ||
-                                                 s->left_ref_ctx[row7] == 1);
-                                    } else {
-                                        c = 2;
-                                    }
-                                } else if (!s->left_ref_ctx[row7]) {
-                                    c = 1 + 2 * (s->fixcompref == 1 ||
-                                                 s->above_ref_ctx[col] == 1);
-                                } else {
-                                    c = 3 * (s->left_ref_ctx[row7] == 1) +
-                                    (s->fixcompref == 1 || s->above_ref_ctx[col] == 1);
-                                }
-                            } else if (s->left_comp_ctx[row7]) {
-                                if (!s->above_ref_ctx[col]) {
-                                    c = 1 + 2 * (s->fixcompref == 1 ||
-                                                 s->left_ref_ctx[row7] == 1);
-                                } else {
-                                    c = 3 * (s->above_ref_ctx[col] == 1) +
-                                    (s->fixcompref == 1 || s->left_ref_ctx[row7] == 1);
-                                }
-                            } else if (!s->above_ref_ctx[col]) {
-                                if (!s->left_ref_ctx[row7]) {
-                                    c = 3;
-                                } else {
-                                    c = 4 * (s->left_ref_ctx[row7] == 1);
-                                }
-                            } else if (!s->left_ref_ctx[row7]) {
-                                c = 4 * (s->above_ref_ctx[col] == 1);
-                            } else {
-                                c = 2 * (s->left_ref_ctx[row7] == 1) +
-                                2 * (s->above_ref_ctx[col] == 1);
-                            }
-                        } else {
-                            if (s->above_intra_ctx[col] ||
-                                (!s->above_comp_ctx[col] && !s->above_ref_ctx[col])) {
-                                c = 2;
-                            } else if (s->above_comp_ctx[col]) {
-                                c = 3 * (s->fixcompref == 1 || s->above_ref_ctx[col] == 1);
-                            } else {
-                                c = 4 * (s->above_ref_ctx[col] == 1);
-                            }
-                        }
+                    static const uint8_t c_above_and_left_1ref_lut_p2[3][3][4][4] = {
+                        {
+                            {{2, 3, 4, 0}, {3, 3, 4, 0}, {4, 4, 4, 2}, {0, 0, 2, 0}},
+                            {{2, 1, 3, 1}, {3, 1, 3, 1}, {4, 3, 4, 3}, {0, 0, 1, 0}},
+                            {{2, 3, 3, 3}, {3, 3, 3, 3}, {4, 4, 4, 4}, {0, 1, 1, 1}},
+                        },{
+                            {{2, 3, 4, 0}, {1, 1, 3, 0}, {3, 3, 4, 1}, {1, 1, 3, 0}},
+                            {{2, 1, 3, 1}, {1, 0, 2, 2}, {3, 2, 3, 2}, {1, 2, 2, 0}},
+                            {{2, 3, 3, 3}, {3, 3, 2, 2}, {3, 2, 3, 2}, {3, 2, 2, 3}},
+                        },{
+                            {{2, 3, 4, 0}, {3, 3, 4, 1}, {3, 3, 4, 1}, {3, 3, 4, 1}},
+                            {{2, 3, 3, 3}, {3, 3, 2, 2}, {3, 2, 3, 2}, {3, 2, 2, 3}},
+                            {{2, 3, 3, 3}, {3, 3, 2, 2}, {3, 2, 3, 2}, {3, 2, 2, 3}},
+                        },
+                    };
+                    static const uint8_t c_above_xor_left_1ref_lut_p2[3][4] = {
+                        {2, 2, 4, 0}, {2, 0, 3, 0}, {2, 3, 3, 3}
+                    };
+
+                    if (have_a && have_l) {
+                        const int ref_l  = s->left_intra_ctx[row7] ? 0 : s->left_ref_ctx[row7] + 1,
+                                  ref_a  = s->above_intra_ctx[col] ? 0 : s->above_ref_ctx[col] + 1,
+                                  comp_l = s->left_comp_ctx[row7] ? (s->fixcompref == 1) + 1 : 0,
+                                  comp_a = s->above_comp_ctx[col] ? (s->fixcompref == 1) + 1 : 0;
+                        c = c_above_and_left_1ref_lut_p2[comp_l][comp_a][ref_l][ref_a];
+                    } else if (have_a) {
+                        const int ref_a  = s->above_intra_ctx[col] ? 0 : s->above_ref_ctx[col] + 1,
+                                  comp_a = s->above_comp_ctx[col] ? (s->fixcompref == 1) + 1 : 0;
+                        c = c_above_xor_left_1ref_lut_p2[comp_a][ref_a];
                     } else if (have_l) {
-                        if (s->left_intra_ctx[row7] ||
-                            (!s->left_comp_ctx[row7] && !s->left_ref_ctx[row7])) {
-                            c = 2;
-                        } else if (s->left_comp_ctx[row7]) {
-                            c = 3 * (s->fixcompref == 1 || s->left_ref_ctx[row7] == 1);
-                        } else {
-                            c = 4 * (s->left_ref_ctx[row7] == 1);
-                        }
+                        const int ref_l  = s->left_intra_ctx[row7] ? 0 : s->left_ref_ctx[row7] + 1,
+                                  comp_l = s->left_comp_ctx[row7] ? (s->fixcompref == 1) + 1 : 0;
+                        c = c_above_xor_left_1ref_lut_p2[comp_l][ref_l];
                     } else {
                         c = 2;
                     }
