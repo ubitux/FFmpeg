@@ -20,6 +20,7 @@ EXAMPLES=       avio_reading                       \
                 metadata                           \
                 muxing                             \
                 remuxing                           \
+                playbackfuzz                       \
                 resampling_audio                   \
                 scaling_video                      \
                 transcode_aac                      \

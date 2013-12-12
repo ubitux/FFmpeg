@@ -1315,6 +1315,7 @@ EXAMPLE_LIST="
     metadata_example
     muxing_example
     remuxing_example
+    playbackfuzz_example
     resampling_audio_example
     scaling_video_example
     transcode_aac_example
@@ -2610,6 +2611,7 @@ filtering_video_example_deps="avfilter avcodec avformat avutil"
 metadata_example_deps="avformat avutil"
 muxing_example_deps="avcodec avformat avutil swscale"
 remuxing_example_deps="avcodec avformat avutil"
+playbackfuzz_example_deps="avcodec avformat avutil swresample swscale"
 resampling_audio_example_deps="avutil swresample"
 scaling_video_example_deps="avutil swscale"
 transcode_aac_example_deps="avcodec avformat swresample"
