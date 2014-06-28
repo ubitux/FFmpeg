@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 Clément Bœsch
+ * Copyright (c) 2013-2014 Clément Bœsch
  *
  * This file is part of FFmpeg.
  *
@@ -32,6 +32,11 @@
 #define NBITS 4
 #define BSIZE (1<<(NBITS))
 
+#define SCALE_BITS 14
+#define CONST_SCALE (1<<(SCALE_BITS))
+#define FIX(x) ((x) * CONST_SCALE)
+#define DO_SCALE(x) (((x) + CONST_SCALE) >> (SCALE_BITS-1))
+
 static const char *const var_names[] = { "c", NULL };
 enum { VAR_C, VAR_VARS_NB };
 
@@ -46,8 +51,8 @@ typedef struct {
     int pr_width, pr_height;    // width and height to process
     float sigma;                // used when no expression are st
     float th;                   // threshold (3*sigma)
-    float color_dct[3][3];      // 3x3 DCT for color decorrelation
-    float *cbuf[2][3];          // two planar rgb color buffers
+    int color_dct[3][3];        // 3x3 DCT for color decorrelation
+    int16_t *cbuf[2][3];        // two planar rgb color buffers
     float *weights;             // dct coeff are cumulated with overlapping; these values are used for averaging
     int p_linesize;             // line sizes for color and weights
     int overlap;                // number of block overlapping pixels
@@ -69,15 +74,19 @@ static const AVOption dctdnoiz_options[] = {
 
 AVFILTER_DEFINE_CLASS(dctdnoiz);
 
-static float *dct_block(DCTdnoizContext *ctx, const float *src, int src_linesize)
+static float *dct_block(DCTdnoizContext *ctx, const int16_t *src, int src_linesize)
 {
     int x, y;
     float *column;
 
     for (y = 0; y < BSIZE; y++) {
-        float *line = ctx->block;
+        //float *line = ctx->block;
+        float line[BSIZE];
 
-        memcpy(line, src, BSIZE * sizeof(*line));
+        for (x = 0; x < BSIZE; x++)
+            line[x] = src[x];
+
+        //memcpy(line, src, BSIZE * sizeof(*line));
         src += src_linesize;
         av_dct_calc(ctx->dct, line);
 
@@ -106,7 +115,8 @@ static float *dct_block(DCTdnoizContext *ctx, const float *src, int src_linesize
     return ctx->block;
 }
 
-static void idct_block(DCTdnoizContext *ctx, float *dst, int dst_linesize)
+static void idct_block(DCTdnoizContext *ctx, int16_t *dst, int dst_linesize,
+                       const float *src, int src_linesize)
 {
     int x, y;
     float *block = ctx->block;
@@ -136,10 +146,10 @@ static int config_input(AVFilterLink *inlink)
     AVFilterContext *ctx = inlink->dst;
     DCTdnoizContext *s = ctx->priv;
     int i, x, y, bx, by, linesize, *iweights;
-    const float dct_3x3[3][3] = {
-        { 1./sqrt(3),  1./sqrt(3),  1./sqrt(3) },
-        { 1./sqrt(2),           0, -1./sqrt(2) },
-        { 1./sqrt(6), -2./sqrt(6),  1./sqrt(6) },
+    const int dct_3x3[3][3] = {
+        { FIX(1./sqrt(3)), FIX( 1./sqrt(3)), FIX( 1./sqrt(3)) },
+        { FIX(1./sqrt(2)), FIX(          0), FIX(-1./sqrt(2)) },
+        { FIX(1./sqrt(6)), FIX(-2./sqrt(6)), FIX( 1./sqrt(6)) },
     };
     uint8_t rgba_map[4];
 
@@ -219,21 +229,21 @@ static int query_formats(AVFilterContext *ctx)
     return 0;
 }
 
-static void color_decorrelation(float dct3ch[3][3], float **dst, int dst_linesize,
+static void color_decorrelation(int dct3ch[3][3], int16_t **dst, int dst_linesize,
                                 const uint8_t *src, int src_linesize, int w, int h)
 {
     int x, y;
-    float *dstp_r = dst[0];
-    float *dstp_g = dst[1];
-    float *dstp_b = dst[2];
+    int16_t *dstp_r = dst[0];
+    int16_t *dstp_g = dst[1];
+    int16_t *dstp_b = dst[2];
 
     for (y = 0; y < h; y++) {
         const uint8_t *srcp = src;
 
         for (x = 0; x < w; x++) {
-            dstp_r[x] = srcp[0] * dct3ch[0][0] + srcp[1] * dct3ch[0][1] + srcp[2] * dct3ch[0][2];
-            dstp_g[x] = srcp[0] * dct3ch[1][0] + srcp[1] * dct3ch[1][1] + srcp[2] * dct3ch[1][2];
-            dstp_b[x] = srcp[0] * dct3ch[2][0] + srcp[1] * dct3ch[2][1] + srcp[2] * dct3ch[2][2];
+            dstp_r[x] = DO_SCALE(srcp[0] * dct3ch[0][0] + srcp[1] * dct3ch[0][1] + srcp[2] * dct3ch[0][2]);
+            dstp_g[x] = DO_SCALE(srcp[0] * dct3ch[1][0] + srcp[1] * dct3ch[1][1] + srcp[2] * dct3ch[1][2]);
+            dstp_b[x] = DO_SCALE(srcp[0] * dct3ch[2][0] + srcp[1] * dct3ch[2][1] + srcp[2] * dct3ch[2][2]);
             srcp += 3;
         }
         src += src_linesize;
@@ -243,21 +253,21 @@ static void color_decorrelation(float dct3ch[3][3], float **dst, int dst_linesiz
     }
 }
 
-static void color_correlation(float dct3ch[3][3], uint8_t *dst, int dst_linesize,
-                              float **src, int src_linesize, int w, int h)
+static void color_correlation(int dct3ch[3][3], uint8_t *dst, int dst_linesize,
+                              int16_t **src, int src_linesize, int w, int h)
 {
     int x, y;
-    const float *src_r = src[0];
-    const float *src_g = src[1];
-    const float *src_b = src[2];
+    const int16_t *src_r = src[0];
+    const int16_t *src_g = src[1];
+    const int16_t *src_b = src[2];
 
     for (y = 0; y < h; y++) {
         uint8_t *dstp = dst;
 
         for (x = 0; x < w; x++) {
-            dstp[0] = av_clip_uint8(src_r[x] * dct3ch[0][0] + src_g[x] * dct3ch[1][0] + src_b[x] * dct3ch[2][0]);
-            dstp[1] = av_clip_uint8(src_r[x] * dct3ch[0][1] + src_g[x] * dct3ch[1][1] + src_b[x] * dct3ch[2][1]);
-            dstp[2] = av_clip_uint8(src_r[x] * dct3ch[0][2] + src_g[x] * dct3ch[1][2] + src_b[x] * dct3ch[2][2]);
+            dstp[0] = av_clip_uint8(DO_SCALE(src_r[x] * dct3ch[0][0] + src_g[x] * dct3ch[1][0] + src_b[x] * dct3ch[2][0]));
+            dstp[1] = av_clip_uint8(DO_SCALE(src_r[x] * dct3ch[0][1] + src_g[x] * dct3ch[1][1] + src_b[x] * dct3ch[2][1]));
+            dstp[2] = av_clip_uint8(DO_SCALE(src_r[x] * dct3ch[0][2] + src_g[x] * dct3ch[1][2] + src_b[x] * dct3ch[2][2]));
             dstp += 3;
         }
         dst += dst_linesize;
@@ -268,13 +278,13 @@ static void color_correlation(float dct3ch[3][3], uint8_t *dst, int dst_linesize
 }
 
 static void filter_plane(AVFilterContext *ctx,
-                         float *dst, int dst_linesize,
-                         const float *src, int src_linesize,
+                         int16_t *dst, int dst_linesize,
+                         const int16_t *src, int src_linesize,
                          int w, int h)
 {
     int x, y, bx, by;
     DCTdnoizContext *s = ctx->priv;
-    float *dst0 = dst;
+    int16_t *dst0 = dst;
     const float *weights = s->weights;
 
     // reset block sums
@@ -283,6 +293,7 @@ static void filter_plane(AVFilterContext *ctx,
     // block dct sums
     for (y = 0; y < h - BSIZE + 1; y += s->step) {
         for (x = 0; x < w - BSIZE + 1; x += s->step) {
+            int16_t tmp_block[BSIZE*BSIZE];
             float *ftb = dct_block(s, src + x, src_linesize);
 
             if (s->expr) {
@@ -301,7 +312,11 @@ static void filter_plane(AVFilterContext *ctx,
                     }
                 }
             }
-            idct_block(s, dst + x, dst_linesize);
+            //idct_block(s, dst + x, dst_linesize);
+            idct_block(s, tmp_block, 1);
+            for (by = 0; by < BSIZE; by++)
+                for (bx = 0; bx < BSIZE; bx++)
+                    dst[x + by*dst_linesize + bx] += tmp_block[by*BSIZE + bx];
         }
         src += s->step * src_linesize;
         dst += s->step * dst_linesize;
