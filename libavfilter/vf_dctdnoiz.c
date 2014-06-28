@@ -23,7 +23,6 @@
  * @see http://www.ipol.im/pub/art/2011/ys-dct/
  */
 
-#include "libavcodec/avfft.h"
 #include "libavutil/eval.h"
 #include "libavutil/opt.h"
 #include "drawutils.h"
@@ -35,7 +34,7 @@
 static const char *const var_names[] = { "c", NULL };
 enum { VAR_C, VAR_VARS_NB };
 
-typedef struct {
+typedef struct DCTdnoizContext {
     const AVClass *class;
 
     /* coefficient factor expression */
@@ -43,17 +42,19 @@ typedef struct {
     AVExpr *expr;
     double var_values[VAR_VARS_NB];
 
+    float dct_coeffs[BSIZE*BSIZE];
     int pr_width, pr_height;    // width and height to process
     float sigma;                // used when no expression are st
-    float th;                   // threshold (3*sigma)
+    int th;                     // threshold (3*sigma, rounded)
     float color_dct[3][3];      // 3x3 DCT for color decorrelation
     float *cbuf[2][3];          // two planar rgb color buffers
     float *weights;             // dct coeff are cumulated with overlapping; these values are used for averaging
     int p_linesize;             // line sizes for color and weights
     int overlap;                // number of block overlapping pixels
     int step;                   // block step increment (BSIZE - overlap)
-    DCTContext *dct, *idct;     // DCT and inverse DCT contexts
-    float *block, *tmp_block;   // two BSIZE x BSIZE block buffers
+    void (*filter_freq_func)(struct DCTdnoizContext *s,
+                             const float *src, int src_linesize,
+                             float *dst, int dst_linesize);
 } DCTdnoizContext;
 
 #define OFFSET(x) offsetof(DCTdnoizContext, x)
@@ -69,66 +70,79 @@ static const AVOption dctdnoiz_options[] = {
 
 AVFILTER_DEFINE_CLASS(dctdnoiz);
 
-static float *dct_block(DCTdnoizContext *ctx, const float *src, int src_linesize)
+static av_always_inline void filter_freq(const float *dct_coeffs,
+                                         const float *src, int src_linesize,
+                                         float *dst, int dst_linesize,
+                                         AVExpr *expr, double *var_values,
+                                         int sigma_th)
 {
-    int x, y;
-    float *column;
+    unsigned i, j, k;
+    DECLARE_ALIGNED(32, int16_t, block)[BSIZE * BSIZE];
+    DECLARE_ALIGNED(32, float, tmp_block)[BSIZE * BSIZE];
 
-    for (y = 0; y < BSIZE; y++) {
-        float *line = ctx->block;
+    /* forward DCT */
 
-        memcpy(line, src, BSIZE * sizeof(*line));
-        src += src_linesize;
-        av_dct_calc(ctx->dct, line);
-
-        column = ctx->tmp_block + y;
-        column[0] = line[0] * (1. / sqrt(BSIZE));
-        column += BSIZE;
-        for (x = 1; x < BSIZE; x++) {
-            *column = line[x] * sqrt(2. / BSIZE);
-            column += BSIZE;
+    for (i = 0; i < BSIZE*BSIZE; i += BSIZE) {
+        for (j = 0; j < BSIZE; j++) {
+            float tmp = 0;
+            for (k = 0; k < BSIZE; k++)
+                tmp += dct_coeffs[i + k] * src[k * src_linesize + j];
+            tmp_block[i + j] = tmp * BSIZE;
         }
     }
 
-    column = ctx->tmp_block;
-    for (x = 0; x < BSIZE; x++) {
-        av_dct_calc(ctx->dct, column);
-        column[0] *= 1. / sqrt(BSIZE);
-        for (y = 1; y < BSIZE; y++)
-            column[y] *= sqrt(2. / BSIZE);
-        column += BSIZE;
+    for (j = 0; j < BSIZE; j++) {
+        for (i = 0; i < BSIZE*BSIZE; i += BSIZE) {
+            float tmp = 0;
+            int16_t *b = &block[i + j];
+            for (k = 0; k < BSIZE; k++)
+                tmp += tmp_block[i + k] * dct_coeffs[j * BSIZE + k];
+            *b = lrint(tmp / BSIZE);
+
+            /* frequency filtering */
+            if (expr) {
+                var_values[VAR_C] = FFABS(*b);
+                *b *= av_expr_eval(expr, var_values, NULL);
+            } else {
+                if (FFABS(*b) < sigma_th)
+                    *b = 0;
+            }
+        }
     }
 
-    for (y = 0; y < BSIZE; y++)
-        for (x = 0; x < BSIZE; x++)
-            ctx->block[y*BSIZE + x] = ctx->tmp_block[x*BSIZE + y];
+    /* inverse DCT */
 
-    return ctx->block;
+    for (i = 0; i < BSIZE*BSIZE; i += BSIZE) {
+        for (j = 0; j < BSIZE; j++) {
+            float tmp = 0;
+            for (k = 0; k < BSIZE; k++)
+                tmp += block[i + k] * dct_coeffs[k * BSIZE + j];
+            tmp_block[i + j] = tmp;
+        }
+    }
+
+    for (i = 0; i < BSIZE; i++) {
+        for (j = 0; j < BSIZE; j++) {
+            float tmp = 0;
+            for (k = 0; k < BSIZE*BSIZE; k += BSIZE)
+                tmp += dct_coeffs[k + i] * tmp_block[k + j];
+            dst[i * dst_linesize + j] += lrint(tmp);
+        }
+    }
 }
 
-static void idct_block(DCTdnoizContext *ctx, float *dst, int dst_linesize)
+static void filter_freq_sigma(DCTdnoizContext *s,
+                              const float *src, int src_linesize,
+                              float *dst, int dst_linesize)
 {
-    int x, y;
-    float *block = ctx->block;
-    float *tmp = ctx->tmp_block;
+    filter_freq(s->dct_coeffs, src, src_linesize, dst, dst_linesize, NULL, NULL, s->th);
+}
 
-    for (y = 0; y < BSIZE; y++) {
-        block[0] *= sqrt(BSIZE);
-        for (x = 1; x < BSIZE; x++)
-            block[x] *= 1./sqrt(2. / BSIZE);
-        av_dct_calc(ctx->idct, block);
-        block += BSIZE;
-    }
-
-    block = ctx->block;
-    for (y = 0; y < BSIZE; y++) {
-        tmp[0] = block[y] * sqrt(BSIZE);
-        for (x = 1; x < BSIZE; x++)
-            tmp[x] = block[x*BSIZE + y] * (1./sqrt(2. / BSIZE));
-        av_dct_calc(ctx->idct, tmp);
-        for (x = 0; x < BSIZE; x++)
-            dst[x*dst_linesize + y] += tmp[x];
-    }
+static void filter_freq_expr(DCTdnoizContext *s,
+                             const float *src, int src_linesize,
+                             float *dst, int dst_linesize)
+{
+    filter_freq(s->dct_coeffs, src, src_linesize, dst, dst_linesize, s->expr, s->var_values, 0);
 }
 
 static int config_input(AVFilterLink *inlink)
@@ -187,6 +201,7 @@ static int config_input(AVFilterLink *inlink)
 
 static av_cold int init(AVFilterContext *ctx)
 {
+    unsigned i, j;
     DCTdnoizContext *s = ctx->priv;
 
     if (s->expr_str) {
@@ -194,17 +209,19 @@ static av_cold int init(AVFilterContext *ctx)
                                 NULL, NULL, NULL, NULL, 0, ctx);
         if (ret < 0)
             return ret;
+        s->filter_freq_func = filter_freq_expr;
+    } else {
+        s->filter_freq_func = filter_freq_sigma;
     }
 
-    s->th   = s->sigma * 3.;
+    s->th   = lrint(s->sigma * 3.);
     s->step = BSIZE - s->overlap;
-    s->dct  = av_dct_init(NBITS, DCT_II);
-    s->idct = av_dct_init(NBITS, DCT_III);
-    s->block     = av_malloc(BSIZE * BSIZE * sizeof(*s->block));
-    s->tmp_block = av_malloc(BSIZE * BSIZE * sizeof(*s->tmp_block));
 
-    if (!s->dct || !s->idct || !s->tmp_block || !s->block)
-        return AVERROR(ENOMEM);
+    for (j = 0; j < BSIZE; j++) {
+        s->dct_coeffs[j] = sqrt(1. / BSIZE);
+        for (i = BSIZE; i < BSIZE*BSIZE; i += BSIZE)
+            s->dct_coeffs[i + j] = sqrt(2./BSIZE) * cos(i * (j + 0.5) * M_PI / (float)(BSIZE*BSIZE));
+    }
 
     return 0;
 }
@@ -272,7 +289,7 @@ static void filter_plane(AVFilterContext *ctx,
                          const float *src, int src_linesize,
                          int w, int h)
 {
-    int x, y, bx, by;
+    int x, y;
     DCTdnoizContext *s = ctx->priv;
     float *dst0 = dst;
     const float *weights = s->weights;
@@ -282,27 +299,9 @@ static void filter_plane(AVFilterContext *ctx,
 
     // block dct sums
     for (y = 0; y < h - BSIZE + 1; y += s->step) {
-        for (x = 0; x < w - BSIZE + 1; x += s->step) {
-            float *ftb = dct_block(s, src + x, src_linesize);
-
-            if (s->expr) {
-                for (by = 0; by < BSIZE; by++) {
-                    for (bx = 0; bx < BSIZE; bx++) {
-                        s->var_values[VAR_C] = FFABS(*ftb);
-                        *ftb++ *= av_expr_eval(s->expr, s->var_values, s);
-                    }
-                }
-            } else {
-                for (by = 0; by < BSIZE; by++) {
-                    for (bx = 0; bx < BSIZE; bx++) {
-                        if (FFABS(*ftb) < s->th)
-                            *ftb = 0;
-                        ftb++;
-                    }
-                }
-            }
-            idct_block(s, dst + x, dst_linesize);
-        }
+        for (x = 0; x < w - BSIZE + 1; x += s->step)
+            s->filter_freq_func(s, src + x, src_linesize,
+                                   dst + x, dst_linesize);
         src += s->step * src_linesize;
         dst += s->step * dst_linesize;
     }
@@ -388,10 +387,6 @@ static av_cold void uninit(AVFilterContext *ctx)
     int i;
     DCTdnoizContext *s = ctx->priv;
 
-    av_dct_end(s->dct);
-    av_dct_end(s->idct);
-    av_free(s->block);
-    av_free(s->tmp_block);
     av_free(s->weights);
     for (i = 0; i < 2; i++) {
         av_free(s->cbuf[i][0]);
