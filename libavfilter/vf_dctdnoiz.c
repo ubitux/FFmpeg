@@ -28,7 +28,7 @@
 #include "drawutils.h"
 #include "internal.h"
 
-#define NBITS 4
+#define NBITS 3
 #define BSIZE (1<<(NBITS))
 
 #define SCALE_BITS 12
