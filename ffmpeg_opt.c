@@ -29,6 +29,8 @@
 
 #include "libavfilter/avfilter.h"
 
+#include "libavdevice/avdevice.h"
+
 #include "libavutil/avassert.h"
 #include "libavutil/avstring.h"
 #include "libavutil/avutil.h"
@@ -3038,3 +3040,128 @@ const OptionDef options[] = {
 
     { NULL, },
 };
+
+#ifdef PYTHON_BINDING
+
+#include "ffmpeg_python.h"
+
+PyObject *pyff_transcode(FFmpegPython *self, PyObject *args)
+{
+    PyObject *dict;
+    PyObject *inputs;
+    Py_ssize_t i;
+    //OptionParseContext octx;
+
+    char *av[1024] = {0}; // XXX: dynamic + bounds checks
+    int avpos = 0;
+
+    av[avpos++] = av_strdup("dummy"); // XXX
+
+    //memset(&octx, 0, sizeof(octx));
+    //init_parse_context(&octx, groups, FF_ARRAY_ELEMS(groups));
+
+    avcodec_register_all();
+#if CONFIG_AVDEVICE
+    avdevice_register_all();
+#endif
+    avfilter_register_all();
+    av_register_all();
+    avformat_network_init();
+
+    if (!PyArg_ParseTuple(args, "O", &dict))
+        return NULL;
+
+    if (!PyDict_Check(dict)) {
+        av_log(NULL, AV_LOG_ERROR, "This method need a dict with two \"inputs\" and \"outputs\" lists\n");
+        goto end_no_exception;
+    }
+
+    inputs = PyDict_GetItemString(dict, "inputs");
+    if (!inputs) {
+        av_log(NULL, AV_LOG_ERROR, "No inputs specified, can't continue further\n");
+        goto end_no_exception;
+    }
+
+    if (!PyList_Check(inputs)) {
+        av_log(NULL, AV_LOG_ERROR, "The inputs need to be stored in a list\n");
+        goto end_no_exception;
+    }
+
+    for (i = 0; i < PyList_GET_SIZE(inputs); i++) {
+        PyObject *input = PyList_GetItem(inputs, i);
+        PyObject *key, *value;
+        PyObject *filename_obj;
+        char *filename;
+        Py_ssize_t pos = 0;
+
+        if (!PyDict_Check(input)) {
+            av_log(NULL, AV_LOG_ERROR, "The input %d is not a dict\n", i);
+            goto end_no_exception;
+        }
+
+        while (PyDict_Next(input, &pos, &key, &value)) {
+            char *key_str, *value_str;
+            char *key_arg, *value_arg;
+
+            key_str = PyString_AsString(key);
+            if (!key_str)
+                goto end_exception;
+
+            if (!strcmp(key_str, "filename"))
+                continue;
+
+            value_str = PyString_AsString(value);
+            if (!value_str)
+                goto end_exception;
+
+            // XXX HACK, we should probably fill the internal ffmpeg states instead
+            key_arg = av_malloc(strlen(key_str) + 2);
+            if (!key_arg)
+                goto end_no_exception;
+            key_arg[0] = '-';
+            av_strlcpy(key_arg + 1, key_str, strlen(key_str) + 1);
+            av[avpos++] = key_arg;
+
+            value_arg = av_strdup(value_str);
+            if (!value_arg)
+                goto end_no_exception;
+            av[avpos++] = value_arg;
+        }
+
+        filename_obj = PyDict_GetItemString(input, "filename");
+        if (!filename_obj) {
+            av_log(NULL, AV_LOG_ERROR, "Input %d is missing a filename entry\n", i);
+            goto end_no_exception;
+        }
+        filename = PyString_AsString(filename_obj);
+        if (!filename)
+            goto end_exception;
+
+        // TODO alloc check
+        av[avpos++] = av_strdup("-i");
+        av[avpos++] = av_strdup(filename);
+    }
+
+    for (i = 0; i < avpos; i++) {
+        av_log(0,0," %s", av[i]);
+    }
+    av_log(0,0,"\n");
+
+    ffmpeg_parse_options(avpos, av);
+
+end_no_exception:
+    for (i = 0; i < avpos; i++)
+        av_freep(&av[i]);
+    //uninit_parse_context(&octx);
+
+    Py_INCREF(Py_None);
+    return Py_None;
+
+end_exception:
+    for (i = 0; i < avpos; i++)
+        av_freep(&av[i]);
+    //uninit_parse_context(&octx);
+    return NULL;
+}
+
+#endif

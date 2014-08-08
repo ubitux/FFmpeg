@@ -661,8 +661,8 @@ static void add_opt(OptionParseContext *octx, const OptionDef *opt,
     g->opts[g->nb_opts - 1].val = val;
 }
 
-static void init_parse_context(OptionParseContext *octx,
-                               const OptionGroupDef *groups, int nb_groups)
+void init_parse_context(OptionParseContext *octx,
+                        const OptionGroupDef *groups, int nb_groups)
 {
     static const OptionGroupDef global_group = { "global" };
     int i;

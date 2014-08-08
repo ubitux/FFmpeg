@@ -3848,3 +3848,47 @@ int main(int argc, char **argv)
     exit_program(received_nb_signals ? 255 : main_return_code);
     return main_return_code;
 }
+
+#ifdef PYTHON_BINDING
+
+#include "ffmpeg_python.h"
+
+static PyMethodDef pyff_methods[] = {
+    // XXX: do not create a method for this? iterate directly?
+    {"transcode",      (PyCFunction)pyff_transcode,  METH_VARARGS, "Get a transcode context"},
+    //{"iterate",      (PyCFunction)iterate,      METH_NOARGS,  ""},
+    {NULL, NULL, 0, NULL}
+};
+
+static PyTypeObject ffmpeg_type = {
+    PyObject_HEAD_INIT(NULL)
+    .tp_name      = "ffmpeg.FFmpeg",
+    .tp_basicsize = sizeof(FFmpegPython),
+    .tp_flags     = Py_TPFLAGS_DEFAULT,
+    .tp_doc       = "Main instance",
+    .tp_methods   = pyff_methods,
+    //.tp_init      = (initproc)ffmpeg_init,
+    .tp_new       = PyType_GenericNew,
+};
+
+static PyObject *pyff_show_version(FFmpegPython *self, PyObject *args)
+{
+    show_version(NULL, NULL, NULL);
+    Py_INCREF(Py_None);
+    return Py_None;
+}
+
+PyMODINIT_FUNC initffmpeg(void)
+{
+    static PyMethodDef module_methods[] = {
+        {"print_version",      (PyCFunction)pyff_show_version,  METH_NOARGS, "Get version"},
+        {NULL, NULL, 0, NULL}
+    };
+    PyObject *m = Py_InitModule("ffmpeg", module_methods);
+
+    if (PyType_Ready(&ffmpeg_type) < 0)
+        return;
+    PyModule_AddObject(m, "FFmpeg", (PyObject *)&ffmpeg_type);
+}
+
+#endif

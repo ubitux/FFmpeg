@@ -332,6 +332,12 @@ int split_commandline(OptionParseContext *octx, int argc, char *argv[],
                       const OptionGroupDef *groups, int nb_groups);
 
 /**
+ * TODO
+ */
+void init_parse_context(OptionParseContext *octx,
+                        const OptionGroupDef *groups, int nb_groups);
+
+/**
  * Free all allocated memory in an OptionParseContext.
  */
 void uninit_parse_context(OptionParseContext *octx);
