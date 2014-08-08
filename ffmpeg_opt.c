@@ -3045,6 +3045,75 @@ const OptionDef options[] = {
 
 #include "ffmpeg_python.h"
 
+static PyObject *set_transcode_inputs_or_outputs(int io, PyObject *io_list)
+{
+    Py_ssize_t i;
+    const int io_key  = io ? "inputs" : "outputs";
+    const int io_name = io ? "input"  : "output";
+
+    for (i = 0; i < PyList_GET_SIZE(io_list); i++) {
+        PyObject *io_item = PyList_GetItem(io_list, i);
+        PyObject *key, *value;
+        PyObject *filename_obj;
+        char *filename;
+        Py_ssize_t pos = 0;
+
+        if (!PyDict_Check(io_item)) {
+            av_log(NULL, AV_LOG_ERROR, "The %s %d is not a dict\n", io_name, i);
+            goto end_no_exception;
+        }
+
+        while (PyDict_Next(io_item, &pos, &key, &value)) {
+            char *key_str, *value_str;
+            char *key_arg, *value_arg;
+
+            key_str = PyString_AsString(key);
+            if (!key_str)
+                goto end_exception;
+
+            if (!strcmp(key_str, "filename"))
+                continue;
+
+            value_str = PyString_AsString(value);
+            if (!value_str)
+                goto end_exception;
+
+            // XXX HACK, we should probably fill the internal ffmpeg states instead
+            key_arg = av_malloc(strlen(key_str) + 2);
+            if (!key_arg)
+                goto end_no_exception;
+            key_arg[0] = '-';
+            av_strlcpy(key_arg + 1, key_str, strlen(key_str) + 1);
+            av[avpos++] = key_arg;
+
+            value_arg = av_strdup(value_str);
+            if (!value_arg)
+                goto end_no_exception;
+            av[avpos++] = value_arg;
+        }
+
+        filename_obj = PyDict_GetItemString(io_item, "filename");
+        if (!filename_obj) {
+            av_log(NULL, AV_LOG_ERROR, "Input %d is missing a filename entry\n", i);
+            goto end_no_exception;
+        }
+        filename = PyString_AsString(filename_obj);
+        if (!filename)
+            goto end_exception;
+
+        // TODO alloc check
+        av[avpos++] = av_strdup("-i");
+        av[avpos++] = av_strdup(filename);
+    }
+
+end_no_exception:
+    Py_INCREF(Py_None);
+    return Py_None;
+
+end_exception:
+    return NULL;
+}
+
 PyObject *pyff_transcode(FFmpegPython *self, PyObject *args)
 {
     PyObject *dict;
@@ -3087,60 +3156,13 @@ PyObject *pyff_transcode(FFmpegPython *self, PyObject *args)
         goto end_no_exception;
     }
 
-    for (i = 0; i < PyList_GET_SIZE(inputs); i++) {
-        PyObject *input = PyList_GetItem(inputs, i);
-        PyObject *key, *value;
-        PyObject *filename_obj;
-        char *filename;
-        Py_ssize_t pos = 0;
+    set_transcode_inputs_or_outputs(0, inputs);
 
-        if (!PyDict_Check(input)) {
-            av_log(NULL, AV_LOG_ERROR, "The input %d is not a dict\n", i);
-            goto end_no_exception;
-        }
-
-        while (PyDict_Next(input, &pos, &key, &value)) {
-            char *key_str, *value_str;
-            char *key_arg, *value_arg;
-
-            key_str = PyString_AsString(key);
-            if (!key_str)
-                goto end_exception;
-
-            if (!strcmp(key_str, "filename"))
-                continue;
-
-            value_str = PyString_AsString(value);
-            if (!value_str)
-                goto end_exception;
-
-            // XXX HACK, we should probably fill the internal ffmpeg states instead
-            key_arg = av_malloc(strlen(key_str) + 2);
-            if (!key_arg)
-                goto end_no_exception;
-            key_arg[0] = '-';
-            av_strlcpy(key_arg + 1, key_str, strlen(key_str) + 1);
-            av[avpos++] = key_arg;
-
-            value_arg = av_strdup(value_str);
-            if (!value_arg)
-                goto end_no_exception;
-            av[avpos++] = value_arg;
-        }
-
-        filename_obj = PyDict_GetItemString(input, "filename");
-        if (!filename_obj) {
-            av_log(NULL, AV_LOG_ERROR, "Input %d is missing a filename entry\n", i);
-            goto end_no_exception;
-        }
-        filename = PyString_AsString(filename_obj);
-        if (!filename)
-            goto end_exception;
-
-        // TODO alloc check
-        av[avpos++] = av_strdup("-i");
-        av[avpos++] = av_strdup(filename);
+    outputs = PyDict_GetItemString(dict, "outputs");
+    if (outputs) {
+        set_transcode_inputs_or_outputs(1, outputs);
     }
+
 
     for (i = 0; i < avpos; i++) {
         av_log(0,0," %s", av[i]);
