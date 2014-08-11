@@ -3045,11 +3045,13 @@ const OptionDef options[] = {
 
 #include "ffmpeg_python.h"
 
-static PyObject *set_transcode_inputs_or_outputs(int io, PyObject *io_list)
+static PyObject *set_transcode_inputs_or_outputs(int io, PyObject *io_list,
+                                                 int *avpos_ptr, char **av)
 {
+    PyObject *ret;
     Py_ssize_t i;
-    const int io_key  = io ? "inputs" : "outputs";
-    const int io_name = io ? "input"  : "output";
+    const char *io_name = io == 0 ? "input" : "output";
+    int avpos = *avpos_ptr;
 
     for (i = 0; i < PyList_GET_SIZE(io_list); i++) {
         PyObject *io_item = PyList_GetItem(io_list, i);
@@ -3101,24 +3103,32 @@ static PyObject *set_transcode_inputs_or_outputs(int io, PyObject *io_list)
         if (!filename)
             goto end_exception;
 
-        // TODO alloc check
-        av[avpos++] = av_strdup("-i");
+        if (io == 0)
+            av[avpos++] = av_strdup("-i"); // TODO alloc check
         av[avpos++] = av_strdup(filename);
     }
 
+    goto end;
+
 end_no_exception:
+    ret = Py_None;
     Py_INCREF(Py_None);
-    return Py_None;
+    goto end;
 
 end_exception:
-    return NULL;
+    ret = NULL;
+
+end:
+    *avpos_ptr = avpos;
+    return ret;
 }
 
 PyObject *pyff_transcode(FFmpegPython *self, PyObject *args)
 {
     PyObject *dict;
-    PyObject *inputs;
+    PyObject *inputs, *outputs;
     Py_ssize_t i;
+    PyObject *ret;
     //OptionParseContext octx;
 
     char *av[1024] = {0}; // XXX: dynamic + bounds checks
@@ -3156,13 +3166,16 @@ PyObject *pyff_transcode(FFmpegPython *self, PyObject *args)
         goto end_no_exception;
     }
 
-    set_transcode_inputs_or_outputs(0, inputs);
+    ret = set_transcode_inputs_or_outputs(0, inputs, &avpos, av);
+    if (!ret || ret == Py_None)
+        goto end_ret;
 
     outputs = PyDict_GetItemString(dict, "outputs");
     if (outputs) {
-        set_transcode_inputs_or_outputs(1, outputs);
+        ret = set_transcode_inputs_or_outputs(1, outputs, &avpos, av);
+        if (!ret || ret == Py_None)
+            goto end_ret;
     }
-
 
     for (i = 0; i < avpos; i++) {
         av_log(0,0," %s", av[i]);
@@ -3172,18 +3185,17 @@ PyObject *pyff_transcode(FFmpegPython *self, PyObject *args)
     ffmpeg_parse_options(avpos, av);
 
 end_no_exception:
-    for (i = 0; i < avpos; i++)
-        av_freep(&av[i]);
-    //uninit_parse_context(&octx);
-
     Py_INCREF(Py_None);
-    return Py_None;
+    ret = Py_None;
+    goto end_ret;
 
 end_exception:
+    ret = NULL;
+
+end_ret:
     for (i = 0; i < avpos; i++)
         av_freep(&av[i]);
-    //uninit_parse_context(&octx);
-    return NULL;
+    return ret;
 }
 
 #endif

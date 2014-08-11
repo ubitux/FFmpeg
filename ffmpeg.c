@@ -3871,6 +3871,124 @@ static PyTypeObject ffmpeg_type = {
     .tp_new       = PyType_GenericNew,
 };
 
+static PyObject *pyff_transcode_step(FFmpegPython *self, PyObject *args)
+{
+    int ret, i;
+    AVFormatContext *os;
+    OutputStream *ost;
+    InputStream *ist;
+    int64_t timer_start;
+
+    ret = transcode_init();
+    if (ret < 0)
+        goto fail;
+
+    if (stdin_interaction) {
+        av_log(NULL, AV_LOG_INFO, "Press [q] to stop, [?] for help\n");
+    }
+
+    timer_start = av_gettime_relative();
+
+#if HAVE_PTHREADS
+    if ((ret = init_input_threads()) < 0)
+        goto fail;
+#endif
+
+    while (!received_sigterm) {
+        int64_t cur_time= av_gettime_relative();
+
+        /* if 'q' pressed, exits */
+        if (stdin_interaction)
+            if (check_keyboard_interaction(cur_time) < 0)
+                break;
+
+        /* check if there's any stream where output is still needed */
+        if (!need_output()) {
+            av_log(NULL, AV_LOG_VERBOSE, "No more output streams to write to, finishing.\n");
+            break;
+        }
+
+        ret = transcode_step();
+        if (ret < 0) {
+            if (ret == AVERROR_EOF || ret == AVERROR(EAGAIN))
+                continue;
+
+            av_log(NULL, AV_LOG_ERROR, "Error while filtering.\n");
+            break;
+        }
+
+        /* dump report by using the output first video and audio streams */
+        print_report(0, timer_start, cur_time);
+    }
+#if HAVE_PTHREADS
+    free_input_threads();
+#endif
+
+    /* at the end of stream, we must flush the decoder buffers */
+    for (i = 0; i < nb_input_streams; i++) {
+        ist = input_streams[i];
+        if (!input_files[ist->file_index]->eof_reached && ist->decoding_needed) {
+            output_packet(ist, NULL);
+        }
+    }
+    flush_encoders();
+
+    term_exit();
+
+    /* write the trailer if needed and close file */
+    for (i = 0; i < nb_output_files; i++) {
+        os = output_files[i]->ctx;
+        av_write_trailer(os);
+    }
+
+    /* dump report by using the first video and audio streams */
+    print_report(1, timer_start, av_gettime_relative());
+
+    /* close each encoder */
+    for (i = 0; i < nb_output_streams; i++) {
+        ost = output_streams[i];
+        if (ost->encoding_needed) {
+            av_freep(&ost->enc_ctx->stats_in);
+        }
+    }
+
+    /* close each decoder */
+    for (i = 0; i < nb_input_streams; i++) {
+        ist = input_streams[i];
+        if (ist->decoding_needed) {
+            avcodec_close(ist->dec_ctx);
+            if (ist->hwaccel_uninit)
+                ist->hwaccel_uninit(ist->dec_ctx);
+        }
+    }
+
+    /* finished ! */
+    ret = 0;
+
+ fail:
+#if HAVE_PTHREADS
+    free_input_threads();
+#endif
+
+    if (output_streams) {
+        for (i = 0; i < nb_output_streams; i++) {
+            ost = output_streams[i];
+            if (ost) {
+                if (ost->logfile) {
+                    fclose(ost->logfile);
+                    ost->logfile = NULL;
+                }
+                av_freep(&ost->forced_kf_pts);
+                av_freep(&ost->apad);
+                av_dict_free(&ost->encoder_opts);
+                av_dict_free(&ost->swr_opts);
+                av_dict_free(&ost->resample_opts);
+            }
+        }
+    }
+    return ret;
+}
+
 static PyObject *pyff_show_version(FFmpegPython *self, PyObject *args)
 {
     show_version(NULL, NULL, NULL);
