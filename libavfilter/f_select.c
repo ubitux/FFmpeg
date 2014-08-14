@@ -144,6 +144,7 @@ typedef struct SelectContext {
     av_pixelutils_sad_fn sad;       ///< Sum of the absolute difference function (scene detect only)
     double prev_mafd;               ///< previous MAFD                           (scene detect only)
     AVFrame *prev_picref;           ///< previous frame                          (scene detect only)
+    int block_size;                 ///< size of the SAD block                   (scene detect only)
     double select;
     int select_out;                 ///< mark the selected output pad index
     int nb_outputs;
@@ -235,7 +236,9 @@ static int config_input(AVFilterLink *inlink)
         inlink->type == AVMEDIA_TYPE_AUDIO ? inlink->sample_rate : NAN;
 
     if (select->do_scene_detect) {
-        select->sad = av_pixelutils_get_sad_fn(3, 3, 2, select); // 8x8 both sources aligned
+        const int n = 3 + ((inlink->w & 15) == 0 && (inlink->h & 15) == 0);
+        select->block_size = 1 << n;
+        select->sad = av_pixelutils_get_sad_fn(n, n, 2, select); // 8x8 or 16x16 both sources aligned
         if (!select->sad)
             return AVERROR(EINVAL);
     }
@@ -252,11 +255,12 @@ static double get_scene_score(AVFilterContext *ctx, AVFrame *frame)
         frame->height == prev_picref->height &&
         frame->width  == prev_picref->width) {
         double mafd, diff;
-        const int nb_sad = (frame->height & ~7) * ((frame->width*3) & ~7);
+        const int bsize = select->block_size;
+        const int nb_sad = (frame->height & ~(bsize-1)) * ((frame->width*3) & ~(bsize-1));
         const int64_t sad = av_pixelutils_bdiff(
                                 frame->data[0], frame->linesize[0],
                                 prev_picref->data[0], prev_picref->linesize[0],
-                                select->sad, frame->width*3, frame->height, 8);
+                                select->sad, frame->width*3, frame->height, bsize);
         emms_c();
         mafd = nb_sad ? (double)sad / nb_sad : 0;
         diff = fabs(mafd - select->prev_mafd);
