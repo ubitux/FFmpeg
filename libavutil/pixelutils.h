@@ -49,4 +49,27 @@ typedef int (*av_pixelutils_sad_fn)(const uint8_t *src1, ptrdiff_t stride1,
 av_pixelutils_sad_fn av_pixelutils_get_sad_fn(int w_bits, int h_bits,
                                               int aligned, void *log_ctx);
 
+/**
+ * Compute the SAD of two large buffers block per block with the specified
+ * block SAD function.
+ *
+ * @param sadfn SAD function which can be obtained with av_pixelutils_get_sad_fn
+ * @param w     buffers width to process (the latest sad function call will be
+ *              on w-bsize+1)
+ * @param h     buffers height to process (the latest sad function call will be
+ *              on h-bsize+1)
+ * @param bsize block size (width and height, e.g: 8 for a 8x8 block)
+ *
+ * @return SAD or -1 in case libavutil is not compiled with the pixelutils.
+ *
+ * @note The function will not compute w % bsize remaining bytes on the right
+ * if any, even if the linesize is large enough to allow such read (this
+ * linesize can stay uninitialized). Same thing for the h % bsize remaining
+ * lines at the bottom.
+ */
+int64_t av_pixelutils_bdiff(const uint8_t *s1, ptrdiff_t stride1,
+                            const uint8_t *s2, ptrdiff_t stride2,
+                            av_pixelutils_sad_fn sadfn,
+                            int w, int h, int bsize);
+
 #endif /* AVUTIL_PIXELUTILS_H */

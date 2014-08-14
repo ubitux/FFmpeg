@@ -85,6 +85,27 @@ av_pixelutils_sad_fn av_pixelutils_get_sad_fn(int w_bits, int h_bits, int aligne
 #endif
 }
 
+int64_t av_pixelutils_bdiff(const uint8_t *s1, ptrdiff_t stride1,
+                            const uint8_t *s2, ptrdiff_t stride2,
+                            av_pixelutils_sad_fn sadfn,
+                            int w, int h, int bsize)
+{
+#if !CONFIG_PIXELUTILS
+    return -1;
+#else
+    int x, y;
+    int64_t sad = 0;
+
+    for (y = 0; y < h - bsize + 1; y += bsize) {
+        for (x = 0; x < w - bsize + 1; x += bsize)
+            sad += sadfn(s1 + x, stride1, s2 + x, stride2);
+        s1 += bsize * stride1;
+        s2 += bsize * stride2;
+    }
+    return sad;
+#endif
+}
+
 #ifdef TEST
 #define W1 320
 #define H1 240
