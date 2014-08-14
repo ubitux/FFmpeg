@@ -35,6 +35,7 @@
 #include "libavutil/avassert.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/opt.h"
+#include "libavutil/pixelutils.h"
 #include "libavutil/timestamp.h"
 #include "avfilter.h"
 #include "internal.h"
@@ -82,6 +83,8 @@ typedef struct {
     uint32_t eof;                   ///< bitmask for end of stream
     int64_t lastscdiff;
     int64_t lastn;
+    av_pixelutils_sad_fn sad;       ///< Sum of the absolute difference function
+    int block_size;                 ///< size of the SAD block
 
     /* options */
     int order;
@@ -161,24 +164,16 @@ static int get_height(const FieldMatchContext *fm, const AVFrame *f, int plane)
     return plane ? FF_CEIL_RSHIFT(f->height, fm->vsub) : f->height;
 }
 
-static int64_t luma_abs_diff(const AVFrame *f1, const AVFrame *f2)
+static inline int64_t luma_abs_diff(const FieldMatchContext *fm,
+                                    const AVFrame *f1, const AVFrame *f2)
 {
-    int x, y;
-    const uint8_t *srcp1 = f1->data[0];
-    const uint8_t *srcp2 = f2->data[0];
-    const int src1_linesize = f1->linesize[0];
-    const int src2_linesize = f2->linesize[0];
-    const int width  = f1->width;
-    const int height = f1->height;
-    int64_t acc = 0;
-
-    for (y = 0; y < height; y++) {
-        for (x = 0; x < width; x++)
-            acc += abs(srcp1[x] - srcp2[x]);
-        srcp1 += src1_linesize;
-        srcp2 += src2_linesize;
-    }
-    return acc;
+    const int64_t sad = av_pixelutils_bdiff(
+                            f1->data[0], f1->linesize[0],
+                            f2->data[0], f2->linesize[0],
+                            fm->sad, f1->width, f1->height,
+                            fm->block_size);
+    emms_c();
+    return sad;
 }
 
 static void fill_buf(uint8_t *data, int w, int h, int linesize, uint8_t v)
@@ -740,13 +735,13 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
         if (fm->lastn == outlink->frame_count - 1) {
             if (fm->lastscdiff > fm->scthresh)
                 sc = 1;
-        } else if (luma_abs_diff(fm->prv, fm->src) > fm->scthresh) {
+        } else if (luma_abs_diff(fm, fm->prv, fm->src) > fm->scthresh) {
             sc = 1;
         }
 
         if (!sc) {
             fm->lastn = outlink->frame_count;
-            fm->lastscdiff = luma_abs_diff(fm->src, fm->nxt);
+            fm->lastscdiff = luma_abs_diff(fm, fm->src, fm->nxt);
             sc = fm->lastscdiff > fm->scthresh;
         }
     }
@@ -947,9 +942,10 @@ static av_cold void fieldmatch_uninit(AVFilterContext *ctx)
 static int config_output(AVFilterLink *outlink)
 {
     AVFilterContext *ctx  = outlink->src;
-    const FieldMatchContext *fm = ctx->priv;
+    FieldMatchContext *fm = ctx->priv;
     const AVFilterLink *inlink =
         ctx->inputs[fm->ppsrc ? INPUT_CLEANSRC : INPUT_MAIN];
+    const int n = 3 + ((outlink->w & 15) == 0 && (outlink->h & 15) == 0);
 
     outlink->flags |= FF_LINK_FLAG_REQUEST_LOOP;
     outlink->time_base = inlink->time_base;
@@ -957,6 +953,12 @@ static int config_output(AVFilterLink *outlink)
     outlink->frame_rate = inlink->frame_rate;
     outlink->w = inlink->w;
     outlink->h = inlink->h;
+
+    fm->block_size = 1 << n;
+    fm->sad = av_pixelutils_get_sad_fn(n, n, 2, fm); // 8x8 or 16x16 both sources aligned
+    if (!fm->sad)
+        return AVERROR(EINVAL);
+
     return 0;
 }
 
