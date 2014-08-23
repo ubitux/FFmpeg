@@ -23,6 +23,7 @@
 #if CONFIG_PIXELUTILS
 
 #include "x86/pixelutils.h"
+#include "ppc/pixelutils.h"
 
 static av_always_inline int sad_wxh(const uint8_t *src1, ptrdiff_t stride1,
                                     const uint8_t *src2, ptrdiff_t stride2,
@@ -77,9 +78,8 @@ av_pixelutils_sad_fn av_pixelutils_get_sad_fn(int w_bits, int h_bits, int aligne
     if (w_bits != h_bits) // only squared sad for now
         return NULL;
 
-#if ARCH_X86
-    ff_pixelutils_sad_init_x86(sad, aligned);
-#endif
+    if (ARCH_X86) ff_pixelutils_sad_init_x86(sad, aligned);
+    if (ARCH_PPC) ff_pixelutils_sad_init_ppc(sad, aligned);
 
     return sad[w_bits - 1];
 #endif
