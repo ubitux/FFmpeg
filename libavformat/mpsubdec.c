@@ -141,4 +141,5 @@ AVInputFormat ff_mpsub_demuxer = {
     .read_seek2     = mpsub_read_seek,
     .read_close     = mpsub_read_close,
     .extensions     = "sub",
+    .flags          = AVFMT_FULLREAD,
 };

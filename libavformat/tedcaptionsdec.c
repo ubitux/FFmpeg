@@ -363,4 +363,5 @@ AVInputFormat ff_tedcaptions_demuxer = {
     .read_close     = tedcaptions_read_close,
     .read_probe     = tedcaptions_read_probe,
     .read_seek2     = tedcaptions_read_seek,
+    .flags          = AVFMT_FULLREAD,
 };

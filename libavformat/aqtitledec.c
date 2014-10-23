@@ -145,4 +145,5 @@ AVInputFormat ff_aqtitle_demuxer = {
     .read_close     = aqt_read_close,
     .extensions     = "aqt",
     .priv_class     = &aqt_class,
+    .flags          = AVFMT_FULLREAD,
 };

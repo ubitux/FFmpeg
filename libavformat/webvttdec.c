@@ -220,4 +220,5 @@ AVInputFormat ff_webvtt_demuxer = {
     .read_close     = webvtt_read_close,
     .extensions     = "vtt",
     .priv_class     = &webvtt_demuxer_class,
+    .flags          = AVFMT_FULLREAD,
 };

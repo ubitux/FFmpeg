@@ -184,4 +184,5 @@ AVInputFormat ff_ass_demuxer = {
     .read_packet    = ass_read_packet,
     .read_close     = ass_read_close,
     .read_seek2     = ass_read_seek,
+    .flags          = AVFMT_FULLREAD,
 };

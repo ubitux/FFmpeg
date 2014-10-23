@@ -125,4 +125,5 @@ AVInputFormat ff_vplayer_demuxer = {
     .read_seek2     = vplayer_read_seek,
     .read_close     = vplayer_read_close,
     .extensions     = "txt",
+    .flags          = AVFMT_FULLREAD,
 };

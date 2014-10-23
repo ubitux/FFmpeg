@@ -445,6 +445,7 @@ typedef struct AVProbeData {
                                         */
 
 #define AVFMT_SEEK_TO_PTS   0x4000000 /**< Seeking is based on PTS */
+#define AVFMT_FULLREAD      0x8000000 /**< Demuxer will read the full file at opening and will not do any other file access later */
 
 /**
  * @addtogroup lavf_encoding
@@ -577,7 +578,8 @@ typedef struct AVInputFormat {
     /**
      * Can use flags: AVFMT_NOFILE, AVFMT_NEEDNUMBER, AVFMT_SHOW_IDS,
      * AVFMT_GENERIC_INDEX, AVFMT_TS_DISCONT, AVFMT_NOBINSEARCH,
-     * AVFMT_NOGENSEARCH, AVFMT_NO_BYTE_SEEK, AVFMT_SEEK_TO_PTS.
+     * AVFMT_NOGENSEARCH, AVFMT_NO_BYTE_SEEK, AVFMT_SEEK_TO_PTS,
+     * AVFMT_FULLREAD.
      */
     int flags;
 

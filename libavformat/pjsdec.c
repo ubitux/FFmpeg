@@ -135,4 +135,5 @@ AVInputFormat ff_pjs_demuxer = {
     .read_seek2     = pjs_read_seek,
     .read_close     = pjs_read_close,
     .extensions     = "pjs",
+    .flags          = AVFMT_FULLREAD,
 };

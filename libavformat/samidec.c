@@ -137,4 +137,5 @@ AVInputFormat ff_sami_demuxer = {
     .read_seek2     = sami_read_seek,
     .read_close     = sami_read_close,
     .extensions     = "smi,sami",
+    .flags          = AVFMT_FULLREAD,
 };

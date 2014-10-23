@@ -121,4 +121,5 @@ AVInputFormat ff_subviewer1_demuxer = {
     .read_seek2     = subviewer1_read_seek,
     .read_close     = subviewer1_read_close,
     .extensions     = "sub",
+    .flags          = AVFMT_FULLREAD,
 };

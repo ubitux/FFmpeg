@@ -200,4 +200,5 @@ AVInputFormat ff_microdvd_demuxer = {
     .read_seek2     = microdvd_read_seek,
     .read_close     = microdvd_read_close,
     .priv_class     = &microdvd_class,
+    .flags          = AVFMT_FULLREAD,
 };

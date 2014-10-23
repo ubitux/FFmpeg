@@ -143,4 +143,5 @@ AVInputFormat ff_mpl2_demuxer = {
     .read_seek2     = mpl2_read_seek,
     .read_close     = mpl2_read_close,
     .extensions     = "txt,mpl2",
+    .flags          = AVFMT_FULLREAD,
 };

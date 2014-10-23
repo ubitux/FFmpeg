@@ -15,6 +15,11 @@ libavutil:     2014-08-09
 
 API changes, most recent first:
 
+2014-10-xx - xxxxxxx - lavc 56.11.100 - avformat.h
+  Add AVFMT_FULLREAD to indicates demuxer that after opening no further
+  accesses to the avio API are made (in other term, not reading the file
+  anymore). This is typically used for standalone subtitles files.
+
 2014-10-xx - xxxxxxx - lavc 56.5.0 - avcodec.h
   Replace AVCodecContext.time_base used for decoding
   with AVCodecContext.framerate.

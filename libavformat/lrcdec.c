@@ -244,5 +244,6 @@ AVInputFormat ff_lrc_demuxer = {
     .read_header    = lrc_read_header,
     .read_packet    = lrc_read_packet,
     .read_close     = lrc_read_close,
-    .read_seek2     = lrc_read_seek
+    .read_seek2     = lrc_read_seek,
+    .flags          = AVFMT_FULLREAD,
 };
