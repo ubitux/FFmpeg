@@ -108,6 +108,58 @@ static void lowpass_line_c(uint8_t *dstp, ptrdiff_t width, const uint8_t *srcp,
     }
 }
 
+typedef struct ThreadData {
+    const uint8_t *srcp;
+    uint8_t *dstp;
+    int linesize;
+    int src_linesize,  dst_linesize;
+    int srcp_linesize, dstp_linesize;
+    int lines, cols;
+} ThreadData;
+
+// Low-pass filtering is required when creating an interlaced destination from
+// a progressive source which contains high-frequency vertical detail.
+// Filtering will reduce interlace 'twitter' and Moire patterning.
+static int interlace_slice_lowpass(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
+{
+    int y;
+    ThreadData *td = arg;
+    const TInterlaceContext *tinterlace = ctx->priv;
+    const int lines = td->lines;
+    const int slice_start = (lines *  jobnr   ) / nb_jobs;
+    const int slice_end   = (lines * (jobnr+1)) / nb_jobs;
+    const int srcp_linesize = td->srcp_linesize;
+    const int dstp_linesize = td->dstp_linesize;
+    const uint8_t *srcp = td->srcp + slice_start * srcp_linesize;
+    uint8_t       *dstp = td->dstp + slice_start * dstp_linesize;
+
+    for (y = slice_start; y < slice_end; y++) {
+        const uint8_t *srcp_above = srcp - (y == 0         ? 0 : td->src_linesize);
+        const uint8_t *srcp_below = srcp + (y == lines - 1 ? 0 : td->src_linesize);
+
+        tinterlace->lowpass_line(dstp, td->cols, srcp, srcp_above, srcp_below);
+        dstp += dstp_linesize;
+        srcp += srcp_linesize;
+    }
+    return 0;
+}
+
+static int interlace_slice_copy(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
+{
+    ThreadData *td = arg;
+    const int lines = td->lines;
+    const int slice_start = (lines *  jobnr   ) / nb_jobs;
+    const int slice_end   = (lines * (jobnr+1)) / nb_jobs;
+    const int srcp_linesize = td->srcp_linesize;
+    const int dstp_linesize = td->dstp_linesize;
+    const uint8_t *srcp = td->srcp + slice_start * srcp_linesize;
+    uint8_t       *dstp = td->dstp + slice_start * dstp_linesize;
+
+    av_image_copy_plane(dstp, dstp_linesize, srcp, srcp_linesize,
+                        td->linesize, slice_end - slice_start);
+    return 0;
+}
+
 static av_cold void uninit(AVFilterContext *ctx)
 {
     TInterlaceContext *tinterlace = ctx->priv;
@@ -201,6 +253,8 @@ static int config_out_props(AVFilterLink *outlink)
            tinterlace->mode, (tinterlace->flags & TINTERLACE_FLAG_VLPF) ? "on" : "off",
            inlink->h, outlink->h);
 
+    tinterlace->interlace_slice = (tinterlace->flags & TINTERLACE_FLAG_VLPF) ? interlace_slice_lowpass
+                                                                             : interlace_slice_copy;
     return 0;
 }
 
@@ -217,20 +271,19 @@ static int config_out_props(AVFilterLink *outlink)
  *        only meaningful when interleave is selected
  * @param flags context flags
  */
-static inline
-void copy_picture_field(TInterlaceContext *tinterlace,
+static inline void copy_picture_field(AVFilterContext *ctx,
                         AVFrame *dstf, const AVFrame *srcf,
                         const AVFilterLink *inlink,
                         int src_field, int interleave, int dst_field,
                         int flags)
 {
+    TInterlaceContext *tinterlace = ctx->priv;
     const enum AVPixelFormat format = inlink->format;
     const int w = inlink->w;
     const int src_h = inlink->h;
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(format);
     int plane, vsub = desc->log2_chroma_h;
     int k = src_field == FIELD_UPPER_AND_LOWER ? 1 : 2;
-    int h;
 
     for (plane = 0; plane < desc->nb_components; plane++) {
         int lines = plane == 1 || plane == 2 ? FF_CEIL_RSHIFT(src_h, vsub) : src_h;
@@ -238,37 +291,23 @@ void copy_picture_field(TInterlaceContext *tinterlace,
         int linesize = av_image_get_linesize(format, w, plane);
         const int dst_linesize = dstf->linesize[plane];
         const int src_linesize = srcf->linesize[plane];
-        uint8_t *dstp = dstf->data[plane];
-        const uint8_t *srcp = srcf->data[plane];
+        ThreadData td = {
+            .srcp = srcf->data[plane] + (src_field == FIELD_LOWER               ? src_linesize : 0),
+            .dstp = dstf->data[plane] + (dst_field == FIELD_LOWER && interleave ? dst_linesize : 0),
+            .linesize = linesize,
+            .src_linesize = src_linesize,
+            .dst_linesize = dst_linesize,
+            .srcp_linesize = src_linesize * k,
+            .dstp_linesize = dst_linesize * (interleave ? 2 : 1),
+            .lines = (lines + (src_field == FIELD_UPPER)) / k,
+            .cols  = cols,
+        };
 
         if (linesize < 0)
             return;
 
-        lines = (lines + (src_field == FIELD_UPPER)) / k;
-        if (src_field == FIELD_LOWER)
-            srcp += src_linesize;
-        if (interleave && dst_field == FIELD_LOWER)
-            dstp += dst_linesize;
-        if (flags & TINTERLACE_FLAG_VLPF) {
-            // Low-pass filtering is required when creating an interlaced destination from
-            // a progressive source which contains high-frequency vertical detail.
-            // Filtering will reduce interlace 'twitter' and Moire patterning.
-            int srcp_linesize = src_linesize * k;
-            int dstp_linesize = dst_linesize * (interleave ? 2 : 1);
-            for (h = lines; h > 0; h--) {
-                const uint8_t *srcp_above = srcp - src_linesize;
-                const uint8_t *srcp_below = srcp + src_linesize;
-                if (h == lines) srcp_above = srcp; // there is no line above
-                if (h == 1) srcp_below = srcp;     // there is no line below
-
-                tinterlace->lowpass_line(dstp, cols, srcp, srcp_above, srcp_below);
-                dstp += dstp_linesize;
-                srcp += srcp_linesize;
-            }
-        } else {
-            av_image_copy_plane(dstp, dst_linesize * (interleave ? 2 : 1),
-                                srcp, src_linesize*k, linesize, lines);
-        }
+        ctx->internal->execute(ctx, tinterlace->interlace_slice,
+                               &td, NULL, FFMIN(td.lines, ctx->graph->nb_threads));
     }
 }
 
@@ -302,10 +341,10 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *picref)
         out->top_field_first = 1;
 
         /* write odd frame lines into the upper field of the new frame */
-        copy_picture_field(tinterlace, out, cur, inlink,
+        copy_picture_field(ctx, out, cur, inlink,
                            FIELD_UPPER_AND_LOWER, 1, FIELD_UPPER, tinterlace->flags);
         /* write even frame lines into the lower field of the new frame */
-        copy_picture_field(tinterlace, out, next, inlink,
+        copy_picture_field(ctx, out, next, inlink,
                            FIELD_UPPER_AND_LOWER, 1, FIELD_LOWER, tinterlace->flags);
         av_frame_free(&tinterlace->next);
         break;
@@ -328,10 +367,10 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *picref)
 
         field = (1 + tinterlace->frame) & 1 ? FIELD_UPPER : FIELD_LOWER;
         /* copy upper and lower fields */
-        copy_picture_field(tinterlace, out, cur, inlink,
+        copy_picture_field(ctx, out, cur, inlink,
                            FIELD_UPPER_AND_LOWER, 1, field, tinterlace->flags);
         /* pad with black the other field */
-        copy_picture_field(tinterlace, out, tinterlace->black_frame, inlink,
+        copy_picture_field(ctx, out, tinterlace->black_frame, inlink,
                            FIELD_UPPER_AND_LOWER, 1, !field, tinterlace->flags);
         break;
 
@@ -348,11 +387,11 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *picref)
         out->top_field_first = tff;
 
         /* copy upper/lower field from cur */
-        copy_picture_field(tinterlace, out, cur, inlink,
+        copy_picture_field(ctx, out, cur, inlink,
                            tff ? FIELD_UPPER : FIELD_LOWER, 1, tff ? FIELD_UPPER : FIELD_LOWER,
                            tinterlace->flags);
         /* copy lower/upper field from next */
-        copy_picture_field(tinterlace, out, next, inlink,
+        copy_picture_field(ctx, out, next, inlink,
                            tff ? FIELD_LOWER : FIELD_UPPER, 1, tff ? FIELD_LOWER : FIELD_UPPER,
                            tinterlace->flags);
         av_frame_free(&tinterlace->next);
@@ -384,11 +423,11 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *picref)
         else
             out->pts = AV_NOPTS_VALUE;
         /* write current frame second field lines into the second field of the new frame */
-        copy_picture_field(tinterlace, out, cur, inlink,
+        copy_picture_field(ctx, out, cur, inlink,
                            tff ? FIELD_LOWER : FIELD_UPPER, 1, tff ? FIELD_LOWER : FIELD_UPPER,
                            tinterlace->flags);
         /* write next frame first field lines into the first field of the new frame */
-        copy_picture_field(tinterlace, out, next, inlink,
+        copy_picture_field(ctx, out, next, inlink,
                            tff ? FIELD_UPPER : FIELD_LOWER, 1, tff ? FIELD_UPPER : FIELD_LOWER,
                            tinterlace->flags);
         break;
@@ -430,6 +469,7 @@ AVFilter ff_vf_tinterlace = {
     .inputs        = tinterlace_inputs,
     .outputs       = tinterlace_outputs,
     .priv_class    = &tinterlace_class,
+    .flags         = AVFILTER_FLAG_SLICE_THREADS,
 };
 
 static av_cold int interlace_init(AVFilterContext *ctx)
@@ -451,4 +491,5 @@ AVFilter ff_vf_interlace = {
     .inputs        = tinterlace_inputs,
     .outputs       = tinterlace_outputs,
     .priv_class    = &interlace_class,
+    .flags         = AVFILTER_FLAG_SLICE_THREADS,
 };

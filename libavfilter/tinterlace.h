@@ -52,6 +52,7 @@ typedef struct {
     int lowpass;                ///< enable or disable low pass filterning
     AVFrame *cur, *next;        ///< the two frames from which the new one is obtained
     AVFrame *black_frame;       ///< frame used to fill padded lines
+    int (*interlace_slice)(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs);
     void (*lowpass_line)(uint8_t *dstp, ptrdiff_t width, const uint8_t *srcp,
                          const uint8_t *srcp_above, const uint8_t *srcp_below);
 } TInterlaceContext;
