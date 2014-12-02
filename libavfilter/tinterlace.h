@@ -44,12 +44,13 @@ enum TInterlaceMode {
 typedef struct {
     const AVClass *class;
     enum TInterlaceMode mode;   ///< interlace mode selected
+    int scan;                   ///< top (0) or bottom (1) field first scanning
     AVRational preout_time_base;
     int flags;                  ///< flags affecting interlacing algorithm
     int frame;                  ///< number of the output frame
     int vsub;                   ///< chroma vertical subsampling
-    AVFrame *cur;
-    AVFrame *next;
+    int lowpass;                ///< enable or disable low pass filterning
+    AVFrame *cur, *next;        ///< the two frames from which the new one is obtained
     uint8_t *black_data[4];     ///< buffer used to fill padded lines
     int black_linesize[4];
     void (*lowpass_line)(uint8_t *dstp, ptrdiff_t width, const uint8_t *srcp,

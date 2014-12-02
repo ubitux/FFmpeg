@@ -2,6 +2,7 @@
  * Copyright (c) 2011 Stefano Sabatini
  * Copyright (c) 2010 Baptiste Coudurier
  * Copyright (c) 2003 Michael Zucchi <notzed@ximian.com>
+ * Copyright (c) 2013 Vittorio Giovara <vittorio.giovara@gmail.com>
  *
  * This file is part of FFmpeg.
  *
@@ -56,6 +57,16 @@ static const AVOption tinterlace_options[] = {
 };
 
 AVFILTER_DEFINE_CLASS(tinterlace);
+
+static const AVOption interlace_options[] = {
+    {"scan", "scanning mode", OFFSET(scan), AV_OPT_TYPE_INT, {.i64 = 0}, 0, 1, FLAGS, "scan"},
+        { "tff", "top field first",    0, AV_OPT_TYPE_CONST, {.i64 = 0}, INT_MIN, INT_MAX, FLAGS, "scan"},
+        { "bff", "bottom field first", 0, AV_OPT_TYPE_CONST, {.i64 = 1}, INT_MIN, INT_MAX, FLAGS, "scan"},
+    {"lowpass", "enable vertical low-pass filter", OFFSET(lowpass), AV_OPT_TYPE_INT, {.i64 = 1}, 0, 1, FLAGS},
+    {NULL}
+};
+
+AVFILTER_DEFINE_CLASS(interlace);
 
 #define FULL_SCALE_YUVJ_FORMATS \
     AV_PIX_FMT_YUVJ420P, AV_PIX_FMT_YUVJ422P, AV_PIX_FMT_YUVJ444P, AV_PIX_FMT_YUVJ440P
@@ -114,6 +125,11 @@ static int config_out_props(AVFilterLink *outlink)
     TInterlaceContext *tinterlace = ctx->priv;
     int i;
 
+    if (inlink->h < 2) {
+        av_log(ctx, AV_LOG_ERROR, "input video height is too small\n");
+        return AVERROR_INVALIDDATA;
+    }
+
     tinterlace->vsub = desc->log2_chroma_h;
     outlink->flags |= FF_LINK_FLAG_REQUEST_LOOP;
     outlink->w = inlink->w;
@@ -161,6 +177,13 @@ static int config_out_props(AVFilterLink *outlink)
     if (i == FF_ARRAY_ELEMS(standard_tbs) ||
         (tinterlace->flags & TINTERLACE_FLAG_EXACT_TB))
         outlink->time_base = tinterlace->preout_time_base;
+
+    if (tinterlace->mode == MODE_INTERLEAVE_TOP ||
+        tinterlace->mode == MODE_INTERLEAVE_BOTTOM) {
+        if (!(tinterlace->flags & TINTERLACE_FLAG_VLPF))
+            av_log(ctx, AV_LOG_WARNING, "Vertical lowpass filter is disabled, "
+                   "the resulting video will be aliased rather than interlaced.\n");
+    }
 
     if (tinterlace->flags & TINTERLACE_FLAG_VLPF) {
         tinterlace->lowpass_line = lowpass_line_c;
@@ -413,4 +436,25 @@ AVFilter ff_vf_tinterlace = {
     .inputs        = tinterlace_inputs,
     .outputs       = tinterlace_outputs,
     .priv_class    = &tinterlace_class,
+};
+
+static av_cold int interlace_init(AVFilterContext *ctx)
+{
+    TInterlaceContext *s = ctx->priv;
+
+    s->mode = MODE_INTERLEAVE_TOP + s->scan;
+    s->flags |= s->lowpass ? TINTERLACE_FLAG_VLPF : 0;
+    return 0;
+}
+
+AVFilter ff_vf_interlace = {
+    .name          = "interlace",
+    .description   = NULL_IF_CONFIG_SMALL("Convert progressive video into interlaced."),
+    .priv_size     = sizeof(TInterlaceContext),
+    .init          = interlace_init,
+    .uninit        = uninit,
+    .query_formats = query_formats,
+    .inputs        = tinterlace_inputs,
+    .outputs       = tinterlace_outputs,
+    .priv_class    = &interlace_class,
 };
