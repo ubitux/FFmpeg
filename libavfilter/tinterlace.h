@@ -51,8 +51,7 @@ typedef struct {
     int vsub;                   ///< chroma vertical subsampling
     int lowpass;                ///< enable or disable low pass filterning
     AVFrame *cur, *next;        ///< the two frames from which the new one is obtained
-    uint8_t *black_data[4];     ///< buffer used to fill padded lines
-    int black_linesize[4];
+    AVFrame *black_frame;       ///< frame used to fill padded lines
     void (*lowpass_line)(uint8_t *dstp, ptrdiff_t width, const uint8_t *srcp,
                          const uint8_t *srcp_above, const uint8_t *srcp_below);
 } TInterlaceContext;
