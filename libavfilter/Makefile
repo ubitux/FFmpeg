@@ -68,6 +68,7 @@ OBJS-$(CONFIG_COMPAND_FILTER)                += af_compand.o
 OBJS-$(CONFIG_EARWAX_FILTER)                 += af_earwax.o
 OBJS-$(CONFIG_EBUR128_FILTER)                += f_ebur128.o
 OBJS-$(CONFIG_EQUALIZER_FILTER)              += af_biquads.o
+OBJS-$(CONFIG_FIR_FILTER)                    += af_fir.o
 OBJS-$(CONFIG_FLANGER_FILTER)                += af_flanger.o generate_wave_table.o
 OBJS-$(CONFIG_HIGHPASS_FILTER)               += af_biquads.o
 OBJS-$(CONFIG_JOIN_FILTER)                   += af_join.o
