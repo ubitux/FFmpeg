@@ -58,6 +58,8 @@ static void print_digraph(FILE *outfile, AVFilterGraph *graph)
     fprintf(outfile, "  fontsize=14\n");
     fprintf(outfile, "  node [shape=Mrecord,style=filled,fontsize=13]\n");
 
+    int x = 100;
+
     for (i = 0; i < graph->nb_filters; i++) {
         char filter_ctx_label[128];
         const AVFilterContext *filter_ctx = graph->filters[i];
@@ -87,8 +89,12 @@ static void print_digraph(FILE *outfile, AVFilterGraph *graph)
     }                                                                                           \
 } while (0)
 
+        //fprintf(outfile, "    subgraph cluster_%d {\n", x++);
         PRINT_PADS(input,  dst, 0, "ddff60");
+        //fprintf(outfile, "    }\n");
+        //fprintf(outfile, "    subgraph cluster_%d {\n", x++);
         PRINT_PADS(output, src, 1, "ffdd60");
+        //fprintf(outfile, "    }\n");
         fprintf(outfile, "  }\n");
     }
 
