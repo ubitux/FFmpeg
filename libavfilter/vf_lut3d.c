@@ -461,37 +461,58 @@ static void set_identity_matrix(LUT3DContext *lut3d, int size)
 
 static int query_formats(AVFilterContext *ctx)
 {
-    static const enum AVPixelFormat pix_fmts[] = {
-        AV_PIX_FMT_RGB24,  AV_PIX_FMT_BGR24,
-        AV_PIX_FMT_RGBA,   AV_PIX_FMT_BGRA,
-        AV_PIX_FMT_ARGB,   AV_PIX_FMT_ABGR,
-        AV_PIX_FMT_0RGB,   AV_PIX_FMT_0BGR,
-        AV_PIX_FMT_RGB0,   AV_PIX_FMT_BGR0,
-        AV_PIX_FMT_RGB48,  AV_PIX_FMT_BGR48,
-        AV_PIX_FMT_RGBA64, AV_PIX_FMT_BGRA64,
-        AV_PIX_FMT_NONE
+#define COMMON_PIX_FMTS \
+        AV_PIX_FMT_RGB24,  AV_PIX_FMT_BGR24,    \
+        AV_PIX_FMT_RGBA,   AV_PIX_FMT_BGRA,     \
+        AV_PIX_FMT_ARGB,   AV_PIX_FMT_ABGR,     \
+        AV_PIX_FMT_0RGB,   AV_PIX_FMT_0BGR,     \
+        AV_PIX_FMT_RGB0,   AV_PIX_FMT_BGR0,     \
+        AV_PIX_FMT_RGB48,  AV_PIX_FMT_BGR48,    \
+        AV_PIX_FMT_RGBA64, AV_PIX_FMT_BGRA64
+
+    int ret;
+    static const enum AVPixelFormat in_pix_fmts[] = {
+        COMMON_PIX_FMTS, AV_PIX_FMT_XYZ12, AV_PIX_FMT_NONE
     };
-    AVFilterFormats *fmts_list = ff_make_format_list(pix_fmts);
-    if (!fmts_list)
+    static const enum AVPixelFormat out_pix_fmts[] = {
+        COMMON_PIX_FMTS, AV_PIX_FMT_NONE
+    };
+    AVFilterFormats *in  = ff_make_format_list(in_pix_fmts);
+    AVFilterFormats *out = ff_make_format_list(out_pix_fmts);
+    if (!out || !in)
         return AVERROR(ENOMEM);
-    return ff_set_common_formats(ctx, fmts_list);
+
+    if ((ret = ff_formats_ref(in,  &ctx->inputs[0]->out_formats)) < 0 ||
+        (ret = ff_formats_ref(out, &ctx->outputs[0]->in_formats)) < 0)
+        return ret;
+
+    return 0;
 }
 
 static int config_input(AVFilterLink *inlink)
 {
-    int is16bit = 0;
-    LUT3DContext *lut3d = inlink->dst->priv;
+    int is16bit = 0, isxyz = 0;
+    AVFilterContext *ctx = inlink->dst;
+    LUT3DContext *lut3d = ctx->priv;
     const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(inlink->format);
 
     switch (inlink->format) {
+    case AV_PIX_FMT_XYZ12:
+        isxyz = 1;
+        /* fall-through */
     case AV_PIX_FMT_RGB48:
     case AV_PIX_FMT_BGR48:
     case AV_PIX_FMT_RGBA64:
     case AV_PIX_FMT_BGRA64:
         is16bit = 1;
+        break;
     }
 
-    ff_fill_rgba_map(lut3d->rgba_map, inlink->format);
+    if (isxyz)
+        av_log(ctx, AV_LOG_INFO, "Input is in XYZ pixel format, "
+               "the filter will assume the LUT3D is converting from XYZ to RGB\n");
+
+    ff_fill_rgba_map(lut3d->rgba_map, isxyz ? AV_PIX_FMT_RGBA : inlink->format);
     lut3d->step = av_get_padded_bits_per_pixel(desc) >> (3 + is16bit);
 
 #define SET_FUNC(name) do {                             \
@@ -518,7 +539,7 @@ static AVFrame *apply_lut(AVFilterLink *inlink, AVFrame *in)
     AVFrame *out;
     ThreadData td;
 
-    if (av_frame_is_writable(in)) {
+    if (av_frame_is_writable(in) && inlink->format == outlink->format) {
         out = in;
     } else {
         out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
@@ -527,7 +548,13 @@ static AVFrame *apply_lut(AVFilterLink *inlink, AVFrame *in)
             return NULL;
         }
         av_frame_copy_props(out, in);
+        out->format = outlink->format;
     }
+
+    av_log(ctx, AV_LOG_DEBUG, "inlink:%s outlink:%s in:%s out:%s (inplace:%s)\n",
+           av_get_pix_fmt_name(inlink->format), av_get_pix_fmt_name(outlink->format),
+           av_get_pix_fmt_name(in->format), av_get_pix_fmt_name(out->format),
+           out == in ? "yes" : "no");
 
     td.in  = in;
     td.out = out;
