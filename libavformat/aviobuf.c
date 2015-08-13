@@ -480,9 +480,11 @@ static void fill_buffer(AVIOContext *s)
         len = s->read_packet(s->opaque, dst, len);
     else
         len = 0;
+    av_log(0,0,"read packet -> len=%d\n", len);
     if (len <= 0) {
         /* do not modify buffer if EOF reached so that a seek back can
            be done without rereading data */
+        av_log(0,0,"EOF reached\n");
         s->eof_reached = 1;
         if (len < 0)
             s->error = len;
@@ -539,13 +541,18 @@ int avio_read(AVIOContext *s, unsigned char *buf, int size)
 {
     int len, size1;
 
+    av_log(0,0,"avio_read %d\n", size);
+
     size1 = size;
     while (size > 0) {
         len = s->buf_end - s->buf_ptr;
+        av_log(0,0,"avio_read: size=%d [len=%d]\n", size, len);
         if (len > size)
             len = size;
         if (len == 0 || s->write_flag) {
+            av_log(0,0,"len=%d size=%d buffer_size=%d\n", len, size, s->buffer_size);
             if((s->direct || size > s->buffer_size) && !s->update_checksum){
+                av_log(0,0,"avio_read, read packet %d\n", size);
                 if(s->read_packet)
                     len = s->read_packet(s->opaque, buf, size);
                 if (len <= 0) {
@@ -564,6 +571,7 @@ int avio_read(AVIOContext *s, unsigned char *buf, int size)
                     s->buf_end = s->buffer/* + len*/;
                 }
             } else {
+                av_log(0,0,"fill buffer\n");
                 fill_buffer(s);
                 len = s->buf_end - s->buf_ptr;
                 if (len == 0)
@@ -1041,16 +1049,37 @@ int avio_handshake(AVIOContext *c)
 /* output in a dynamic buffer */
 
 typedef struct DynBuffer {
-    int pos, size, allocated_size;
+    int pos, read_pos, size, allocated_size;
     uint8_t *buffer;
     int io_buffer_size;
     uint8_t io_buffer[1];
 } DynBuffer;
 
+static int dyn_buf_read(void *opaque, uint8_t *buf, int buf_size)
+{
+    int n;
+    DynBuffer *d = opaque;
+
+    av_log(0,0,"READ %d\n", buf_size);
+    if (d->read_pos > d->size)
+        d->read_pos = 0;
+    n = FFMIN(buf_size, d->size - d->read_pos);
+    if (!n) {
+        av_log(0,0,"EOF\n");
+        return AVERROR_EOF;
+    }
+    memcpy(buf, d->buffer + d->read_pos, n);
+    d->read_pos += n;
+    av_log(0,0,"<- %d\n", n);
+    return n;
+}
+
 static int dyn_buf_write(void *opaque, uint8_t *buf, int buf_size)
 {
     DynBuffer *d = opaque;
     unsigned new_size, new_allocated_size;
+
+    av_log(0,0,"dyn write #1\n");
 
     /* reallocate buffer if needed */
     new_size = d->pos + buf_size;
@@ -1077,6 +1106,7 @@ static int dyn_buf_write(void *opaque, uint8_t *buf, int buf_size)
     d->pos = new_size;
     if (d->pos > d->size)
         d->size = d->pos;
+    av_log(0,0,"wrote %d, size=%d\n", buf_size, d->size);
     return buf_size;
 }
 
@@ -1084,6 +1114,8 @@ static int dyn_packet_buf_write(void *opaque, uint8_t *buf, int buf_size)
 {
     unsigned char buf1[4];
     int ret;
+
+    av_log(0,0,"dyn write #2\n");
 
     /* packetized write: output the header */
     AV_WB32(buf1, buf_size);
@@ -1099,13 +1131,14 @@ static int64_t dyn_buf_seek(void *opaque, int64_t offset, int whence)
 {
     DynBuffer *d = opaque;
 
+    av_log(0,0,"seek to %"PRId64"\n", offset);
     if (whence == SEEK_CUR)
         offset += d->pos;
     else if (whence == SEEK_END)
         offset += d->size;
     if (offset < 0 || offset > 0x7fffffffLL)
         return -1;
-    d->pos = offset;
+    d->pos = d->read_pos = offset;
     return 0;
 }
 
@@ -1120,7 +1153,7 @@ static int url_open_dyn_buf_internal(AVIOContext **s, int max_packet_size)
     if (!d)
         return AVERROR(ENOMEM);
     d->io_buffer_size = io_buffer_size;
-    *s = avio_alloc_context(d->io_buffer, d->io_buffer_size, 1, d, NULL,
+    *s = avio_alloc_context(d->io_buffer, d->io_buffer_size, 1, d, dyn_buf_read,
                             max_packet_size ? dyn_packet_buf_write : dyn_buf_write,
                             max_packet_size ? NULL : dyn_buf_seek);
     if(!*s) {
