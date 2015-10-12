@@ -20,7 +20,6 @@
 
 /**
  * @todo
- * - use integers so it can be made bitexact and a FATE test can be added
  * - >8 bit support
  */
 
@@ -74,6 +73,7 @@ typedef struct {
     int correction_method;
     char *opt_cmyk_adjust[NB_RANGES];
     float cmyk_adjust[NB_RANGES][4];
+    int cmyk_adjust_int[NB_RANGES][4];
     struct process_range process_ranges[NB_RANGES]; // color ranges to process
     int nb_process_ranges;
     char *psfile;
@@ -246,7 +246,7 @@ end:
 
 static av_cold int init(AVFilterContext *ctx)
 {
-    int i, ret;
+    int i, j, ret;
     SelectiveColorContext *s = ctx->priv;
 
     /* If the following conditions are not met, it will cause trouble while
@@ -277,9 +277,13 @@ static av_cold int init(AVFilterContext *ctx)
     for (i = 0; i < s->nb_process_ranges; i++) {
         const struct process_range *pr = &s->process_ranges[i];
         const float *cmyk = s->cmyk_adjust[pr->range_id];
+        int *cmyk_int = s->cmyk_adjust_int[pr->range_id];
 
         av_log(s, AV_LOG_VERBOSE, "%8ss: C=%6g M=%6g Y=%6g K=%6g\n",
                color_names[pr->range_id], cmyk[0], cmyk[1], cmyk[2], cmyk[3]);
+
+        for (j = 0; j < 4; j++)
+            cmyk_int[j] = lrint(cmyk[j] * 255.);
     }
 
     return 0;
@@ -294,14 +298,14 @@ static int query_formats(AVFilterContext *ctx)
     return ff_set_common_formats(ctx, fmts_list);
 }
 
-static inline int comp_adjust(int adjust_range, float value, float adjust, float k, int correction_method)
+static inline int comp_adjust(int adjust_range, int value, int adjust, int k, int correction_method)
 {
-    const float min = -value;
-    const float max = 1. - value;
-    float res = (-1. - adjust) * k - adjust;
+    const int min = -value;
+    const int max = 255 - value;
+    int res = (adjust - 255) * k / 255 + adjust;
     if (correction_method == CORRECTION_METHOD_RELATIVE)
         res *= max;
-    return lrint(av_clipf(res, min, max) * adjust_range);
+    return av_clip(res, min, max) * adjust_range / 255;
 }
 
 static inline int selective_color(AVFilterContext *ctx, ThreadData *td,
@@ -341,9 +345,6 @@ static inline int selective_color(AVFilterContext *ctx, ThreadData *td,
                                       | (color && (color & 0xffffff) != 0xffffff) << RANGE_NEUTRALS
                                       | (r < 128 && g < 128 && b < 128) << RANGE_BLACKS;
 
-            const float rnorm = r / 255.;
-            const float gnorm = g / 255.;
-            const float bnorm = b / 255.;
             int adjust_r = 0, adjust_g = 0, adjust_b = 0;
 
             for (i = 0; i < s->nb_process_ranges; i++) {
@@ -353,15 +354,15 @@ static inline int selective_color(AVFilterContext *ctx, ThreadData *td,
                     const int adjust_range = pr->get_adjust_range(r, g, b, min_color, max_color);
 
                     if (adjust_range > 0) {
-                        const float *cmyk_adjust = s->cmyk_adjust[pr->range_id];
-                        const float adj_c = cmyk_adjust[0];
-                        const float adj_m = cmyk_adjust[1];
-                        const float adj_y = cmyk_adjust[2];
-                        const float k = cmyk_adjust[3];
+                        const int *cmyk = s->cmyk_adjust_int[pr->range_id];
+                        const int adj_c = cmyk[0];
+                        const int adj_m = cmyk[1];
+                        const int adj_y = cmyk[2];
+                        const int adj_k = cmyk[3];
 
-                        adjust_r += comp_adjust(adjust_range, rnorm, adj_c, k, correction_method);
-                        adjust_g += comp_adjust(adjust_range, gnorm, adj_m, k, correction_method);
-                        adjust_b += comp_adjust(adjust_range, bnorm, adj_y, k, correction_method);
+                        adjust_r += comp_adjust(adjust_range, r, -adj_c, adj_k, correction_method);
+                        adjust_g += comp_adjust(adjust_range, g, -adj_m, adj_k, correction_method);
+                        adjust_b += comp_adjust(adjust_range, b, -adj_y, adj_k, correction_method);
                     }
                 }
             }
