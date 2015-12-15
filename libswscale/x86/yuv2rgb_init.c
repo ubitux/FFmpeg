@@ -101,8 +101,10 @@ av_cold SwsFunc ff_yuv2rgb_init_x86(SwsContext *c)
                     return yuva420_bgr32_mmx;
 #endif
                     break;
-                } else
+                } else {
+                    av_log(0,0,"-> yuv420_bgr32_mmx\n");
                     return yuv420_bgr32_mmx;
+                }
             case AV_PIX_FMT_RGB24:
                 return yuv420_rgb24_mmx;
             case AV_PIX_FMT_BGR24:
