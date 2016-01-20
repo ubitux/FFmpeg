@@ -70,6 +70,8 @@ static void* attribute_align_arg worker(void *v)
     int thread_count = avctx->thread_count;
     int self_id;
 
+    ff_thread_setname("lavc-slice");
+
     pthread_mutex_lock(&c->current_job_lock);
     self_id = c->current_job++;
     for (;;){

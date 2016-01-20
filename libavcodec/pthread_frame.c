@@ -132,6 +132,8 @@ static attribute_align_arg void *frame_worker_thread(void *arg)
     AVCodecContext *avctx = p->avctx;
     const AVCodec *codec = avctx->codec;
 
+    ff_thread_setname("lavc-frame");
+
     pthread_mutex_lock(&p->mutex);
     while (1) {
             while (p->state == STATE_INPUT_READY && !fctx->die)

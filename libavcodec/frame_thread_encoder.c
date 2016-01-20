@@ -62,6 +62,8 @@ static void * attribute_align_arg worker(void *v){
     ThreadContext *c = avctx->internal->frame_thread_encoder;
     AVPacket *pkt = NULL;
 
+    ff_thread_setname("lavc-frame-enc");
+
     while(!c->exit){
         int got_packet, ret;
         AVFrame *frame;

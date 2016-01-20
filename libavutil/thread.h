@@ -126,10 +126,23 @@ static inline int strict_pthread_once(pthread_once_t *once_control, void (*init_
 #define pthread_once           strict_pthread_once
 #endif
 
+static inline void ff_thread_setname(const char *name)
+{
+#if HAVE_PTHREAD_SETNAME_NP
+#if defined(__APPLE__)
+    pthread_setname_np(name);
+#elif defined(__linux__) && defined(__GLIBC__)
+    pthread_setname_np(pthread_self(), name);
+#endif
+#endif
+}
+
 #elif HAVE_OS2THREADS
 #include "compat/os2threads.h"
+#define ff_thread_setname(name) (0)
 #else
 #include "compat/w32pthreads.h"
+#define ff_thread_setname(name) (0)
 #endif
 
 #define AVMutex pthread_mutex_t
@@ -157,6 +170,8 @@ static inline int strict_pthread_once(pthread_once_t *once_control, void (*init_
 
 #define AVOnce char
 #define AV_ONCE_INIT 0
+
+#define ff_thread_setname(name) (0)
 
 static inline int ff_thread_once(char *control, void (*routine)(void))
 {

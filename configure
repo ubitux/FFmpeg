@@ -1877,6 +1877,7 @@ SYSTEM_FUNCS="
     PeekNamedPipe
     posix_memalign
     pthread_cancel
+    pthread_setname_np
     sched_getaffinity
     SetConsoleTextAttribute
     SetConsoleCtrlHandler
@@ -5418,6 +5419,7 @@ fi
 
 if enabled pthreads; then
   check_func pthread_cancel
+  check_func pthread_setname_np
 fi
 
 disabled  zlib || check_lib   zlib.h      zlibVersion -lz   || disable  zlib

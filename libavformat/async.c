@@ -181,6 +181,8 @@ static void *async_buffer_task(void *arg)
     int           ret  = 0;
     int64_t       seek_ret;
 
+    ff_thread_setname("lavf-async-buf");
+
     while (1) {
         int fifo_space, to_copy;
 

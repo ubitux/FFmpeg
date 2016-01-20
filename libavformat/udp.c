@@ -35,6 +35,7 @@
 #include "libavutil/avstring.h"
 #include "libavutil/opt.h"
 #include "libavutil/log.h"
+#include "libavutil/thread.h"
 #include "libavutil/time.h"
 #include "internal.h"
 #include "network.h"
@@ -491,6 +492,8 @@ static void *circular_buffer_task( void *_URLContext)
     URLContext *h = _URLContext;
     UDPContext *s = h->priv_data;
     int old_cancelstate;
+
+    ff_thread_setname("udp-circ-buf");
 
     pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &old_cancelstate);
     pthread_mutex_lock(&s->mutex);
