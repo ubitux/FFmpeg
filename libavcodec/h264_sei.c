@@ -244,8 +244,25 @@ static int decode_unregistered_user_data(H264Context *h, int size)
     if (e == 1 && build == 1 && !strncmp(user_data+16, "x264 - core 0000", 16))
         h->x264_build = 67;
 
-    if (strlen(user_data + 16) > 0)
+    if (!memcmp(user_data, "\x17\xee\x8c\x60\xf8\x4d\x11\xd9"
+                           "\x8c\xd6\x08\x00\x20\x0c\x9a\x66", 16)) {
+        const uint8_t *p = user_data + 16;
+        const uint8_t *p_end = user_data + size;
+
+        if (!strncmp(p, "MDPM", 4)) {
+            p += 4;
+            av_log(0,0,"MDPM\n");
+            while (p + 5 < p_end) {
+                const uint8_t tag = p[0];
+                const uint32_t v  = p[1]<<24 | p[2]<<16 | p[3]<<8 | p[4];
+                av_log(0,0,"tag=%02x data=%08x\n", tag, v);
+                p += 4;
+            }
+        }
+
+    } else if (strlen(user_data + 16) > 0) {
         av_log(h->avctx, AV_LOG_DEBUG, "user data:\"%s\"\n", user_data + 16);
+    }
 
     av_free(user_data);
     return 0;
