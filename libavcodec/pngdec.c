@@ -170,34 +170,6 @@ static void png_put_interlaced_row(uint8_t *dst, int width,
     }
 }
 
-void ff_add_png_paeth_prediction(uint8_t *dst, uint8_t *src, uint8_t *top,
-                                 int w, int bpp)
-{
-    int i;
-    for (i = 0; i < w; i++) {
-        int a, b, c, p, pa, pb, pc;
-
-        a = dst[i - bpp];
-        b = top[i];
-        c = top[i - bpp];
-
-        p  = b - c;
-        pc = a - c;
-
-        pa = abs(p);
-        pb = abs(pc);
-        pc = abs(p + pc);
-
-        if (pa <= pb && pa <= pc)
-            p = a;
-        else if (pb <= pc)
-            p = b;
-        else
-            p = c;
-        dst[i] = p + src[i];
-    }
-}
-
 #define UNROLL1(bpp, op)                                                      \
     {                                                                         \
         r = dst[0];                                                           \
@@ -286,7 +258,7 @@ static void png_filter_row(PNGDSPContext *dsp, uint8_t *dst, int filter_type,
                 i = w;
             }
         }
-        ff_add_png_paeth_prediction(dst + i, src + i, last + i, size - i, bpp);
+        dsp->add_paeth_prediction(dst + i, src + i, last + i, size - i, bpp);
         break;
     }
 }

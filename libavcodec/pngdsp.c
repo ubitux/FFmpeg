@@ -40,10 +40,38 @@ static void add_bytes_l2_c(uint8_t *dst, uint8_t *src1, uint8_t *src2, int w)
         dst[i] = src1[i] + src2[i];
 }
 
+static void add_png_paeth_prediction_c(uint8_t *dst, uint8_t *src, uint8_t *top,
+                                       int w, int bpp)
+{
+    int i;
+    for (i = 0; i < w; i++) {
+        int a, b, c, p, pa, pb, pc;
+
+        a = dst[i - bpp];
+        b = top[i];
+        c = top[i - bpp];
+
+        p  = b - c;
+        pc = a - c;
+
+        pa = abs(p);
+        pb = abs(pc);
+        pc = abs(p + pc);
+
+        if (pa <= pb && pa <= pc)
+            p = a;
+        else if (pb <= pc)
+            p = b;
+        else
+            p = c;
+        dst[i] = p + src[i];
+    }
+}
+
 av_cold void ff_pngdsp_init(PNGDSPContext *dsp)
 {
     dsp->add_bytes_l2         = add_bytes_l2_c;
-    dsp->add_paeth_prediction = ff_add_png_paeth_prediction;
+    dsp->add_paeth_prediction = add_png_paeth_prediction_c;
 
     if (ARCH_X86)
         ff_pngdsp_init_x86(dsp);
