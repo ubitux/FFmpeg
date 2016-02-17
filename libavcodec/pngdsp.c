@@ -75,4 +75,6 @@ av_cold void ff_pngdsp_init(PNGDSPContext *dsp)
 
     if (ARCH_X86)
         ff_pngdsp_init_x86(dsp);
+    if (ARCH_AARCH64)
+        ff_pngdsp_init_aarch64(dsp);
 }

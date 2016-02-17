@@ -1,7 +1,4 @@
 /*
- * PNG image format
- * Copyright (c) 2008 Loren Merrit <lorenm@u.washington.edu>
- *
  * This file is part of FFmpeg.
  *
  * FFmpeg is free software; you can redistribute it and/or
@@ -19,23 +16,22 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef AVCODEC_PNGDSP_H
-#define AVCODEC_PNGDSP_H
+#include "config.h"
 
-#include <stdint.h>
+#include "libavutil/aarch64/cpu.h"
+#include "libavcodec/pngdsp.h"
 
-typedef struct PNGDSPContext {
-    void (*add_bytes_l2)(uint8_t *dst,
-                         uint8_t *src1 /* align 16 */,
-                         uint8_t *src2, int w);
+void ff_add_paeth_prediction_aarch64(uint8_t *dst, uint8_t *src,
+                                     uint8_t *top, int w, int bpp);
+void ff_add_bytes_l2_aarch64(uint8_t *dst, uint8_t *src1,
+                             uint8_t *src2, int w);
 
-    /* this might write to dst[w] */
-    void (*add_paeth_prediction)(uint8_t *dst, uint8_t *src,
-                                 uint8_t *top, int w, int bpp);
-} PNGDSPContext;
+av_cold void ff_pngdsp_init_aarch64(PNGDSPContext *dsp)
+{
+    int cpu_flags = av_get_cpu_flags();
 
-void ff_pngdsp_init(PNGDSPContext *dsp);
-void ff_pngdsp_init_x86(PNGDSPContext *dsp);
-void ff_pngdsp_init_aarch64(PNGDSPContext *dsp);
-
-#endif /* AVCODEC_PNGDSP_H */
+    if (have_neon(cpu_flags)) {
+        dsp->add_bytes_l2 = ff_add_bytes_l2_aarch64;
+        //dsp->add_paeth_prediction = ff_add_paeth_prediction_aarch64;
+    }
+}

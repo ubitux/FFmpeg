@@ -1,7 +1,4 @@
 /*
- * PNG image format
- * Copyright (c) 2008 Loren Merrit <lorenm@u.washington.edu>
- *
  * This file is part of FFmpeg.
  *
  * FFmpeg is free software; you can redistribute it and/or
@@ -19,23 +16,19 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#ifndef AVCODEC_PNGDSP_H
-#define AVCODEC_PNGDSP_H
+#include "libavutil/aarch64/asm.S"
 
-#include <stdint.h>
+function ff_add_bytes_l2_aarch64, export=1
+1:
+        ld1         {v2.16B}, [x1], #16
+        ld1         {v3.16B}, [x2], #16
+        add         v4.16B, v2.16B, v3.16B
+        st1         {v4.16B}, [x0], #16
+        subs        w3, w3, #16
+        b.gt        1b
+        ret
+endfunc
 
-typedef struct PNGDSPContext {
-    void (*add_bytes_l2)(uint8_t *dst,
-                         uint8_t *src1 /* align 16 */,
-                         uint8_t *src2, int w);
-
-    /* this might write to dst[w] */
-    void (*add_paeth_prediction)(uint8_t *dst, uint8_t *src,
-                                 uint8_t *top, int w, int bpp);
-} PNGDSPContext;
-
-void ff_pngdsp_init(PNGDSPContext *dsp);
-void ff_pngdsp_init_x86(PNGDSPContext *dsp);
-void ff_pngdsp_init_aarch64(PNGDSPContext *dsp);
-
-#endif /* AVCODEC_PNGDSP_H */
+function ff_add_paeth_prediction_aarch64, export=1
+    ret
+endfunc
