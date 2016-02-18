@@ -215,9 +215,11 @@ static void png_filter_row(PNGDSPContext *dsp, uint8_t *dst, int filter_type,
 
     switch (filter_type) {
     case PNG_FILTER_VALUE_NONE:
+        av_log(0,0,"COPY size=%d\n", size);
         memcpy(dst, src, size);
         break;
     case PNG_FILTER_VALUE_SUB:
+        av_log(0,0,"SUB size=%d\n", size);
         for (i = 0; i < bpp; i++)
             dst[i] = src[i];
         if (bpp == 4) {
@@ -233,9 +235,11 @@ static void png_filter_row(PNGDSPContext *dsp, uint8_t *dst, int filter_type,
         }
         break;
     case PNG_FILTER_VALUE_UP:
+        av_log(0,0,"UP size=%d\n", size);
         dsp->add_bytes_l2(dst, src, last, size);
         break;
     case PNG_FILTER_VALUE_AVG:
+        av_log(0,0,"AVG size=%d\n", size);
         for (i = 0; i < bpp; i++) {
             p      = (last[i] >> 1);
             dst[i] = p + src[i];
@@ -244,6 +248,7 @@ static void png_filter_row(PNGDSPContext *dsp, uint8_t *dst, int filter_type,
         UNROLL_FILTER(OP_AVG);
         break;
     case PNG_FILTER_VALUE_PAETH:
+        av_log(0,0,"PAETH size=%d\n", size);
         for (i = 0; i < bpp; i++) {
             p      = last[i];
             dst[i] = p + src[i];

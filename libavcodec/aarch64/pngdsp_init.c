@@ -32,6 +32,6 @@ av_cold void ff_pngdsp_init_aarch64(PNGDSPContext *dsp)
 
     if (have_neon(cpu_flags)) {
         dsp->add_bytes_l2 = ff_add_bytes_l2_aarch64;
-        //dsp->add_paeth_prediction = ff_add_paeth_prediction_aarch64;
+        dsp->add_paeth_prediction = ff_add_paeth_prediction_aarch64;
     }
 }
