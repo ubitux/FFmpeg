@@ -42,6 +42,7 @@ static void add_png_paeth_prediction_c(uint8_t *dst, uint8_t *src, uint8_t *top,
                                        int w, int bpp)
 {
     int i;
+    av_log(0,0,"w=%d bpp=%d\n", w, bpp);
     for (i = 0; i < w; i++) {
         int a, b, c, p, pa, pb, pc;
 
@@ -62,6 +63,7 @@ static void add_png_paeth_prediction_c(uint8_t *dst, uint8_t *src, uint8_t *top,
             p = b;
         else
             p = c;
+        av_log(0,0,"a=%d b=%d c=%d -> p=%d\n", a,b,c,p);
         dst[i] = p + src[i];
     }
 }

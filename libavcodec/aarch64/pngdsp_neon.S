@@ -102,6 +102,13 @@ display $v23.h.u
 display $v22.h.u
 display $v21.h.u
 display $v20.h.u
+
+display $v18.b.u
+display $v17.b.u
+display $v16.b.u
+display $v2.b.u
+display $v1.b.u
+display $v0.b.u
 */
 
 function ff_add_paeth_prediction_aarch64, export=1
@@ -139,10 +146,10 @@ function ff_add_paeth_prediction_aarch64, export=1
         and         v0.16B, v0.16B, v16.16B     // case p = a
         and         v1.16B, v1.16B, v17.16B     // case p = b
         and         v2.16B, v2.16B, v18.16B     // case p = c
+        orr         v4.16B, v0.16B, v1.16B
+        orr         v4.16B, v4.16B, v2.16B
         ld1         {v3.16B}, [x1], #16         // src (TODO: preload at the beginning?)
-        add         v3.16B, v3.16B, v0.16B
-        add         v3.16B, v3.16B, v1.16B
-        add         v3.16B, v3.16B, v2.16B
+        add         v3.16B, v3.16B, v4.16B
         st1         {v3.16B}, [x0], #16
         subs        w3, w3, #16
         b.gt        1b

@@ -106,18 +106,18 @@ cglobal add_png_paeth_prediction, 5, 7, %1, dst, src, top, w, bpp, end, cntr
     shr              cntrq, 2 + mmsize/16
 .bpp_loop:
     lea               dstq, [dstq+cntrq*(mmsize/2)]
-    movh                m0, [dstq]
-    movh                m1, [topq+dstq]
+    movh                m0, [dstq]                  ; m0 = dst[-bpp] <- a
+    movh                m1, [topq+dstq]             ; m1 = top[0]    <- b
     punpcklbw           m0, m7
     punpcklbw           m1, m7
     add               dstq, bppq
 .loop:
-    mova                m2, m1
-    movh                m1, [topq+dstq]
-    mova                m3, m2
+    mova                m2, m1                      ; m2 = b
+    movh                m1, [topq+dstq]             ; m1 = top[bpp]
+    mova                m3, m2                      ; m3 = b
     punpcklbw           m1, m7
-    mova                m4, m2
-    psubw               m3, m1
+    mova                m4, m2                      ; m4 = b
+    psubw               m3, m1                      ; b - 
     psubw               m4, m0
     mova                m5, m3
     paddw               m5, m4
