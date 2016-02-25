@@ -23,6 +23,29 @@
 
 %include "libavutil/x86/x86util.asm"
 
+%if ARCH_X86_64
+%define pointer resq
+%else
+%define pointer resd
+%endif
+
+struc yuv2rgb_ctx
+    .dst:                   pointer 1
+    .src_y:                 pointer 1
+    .src_u:                 pointer 1
+    .src_v:                 pointer 1
+    .linesize_dst:          resd 1
+    .linesize_y:            resd 1
+    .linesize_u:            resd 1
+    .linesize_v:            resd 1
+    .y_coeff:               pointer 1
+    .y_offset:              pointer 1
+    .v2r_coeff:             pointer 1
+    .u2g_coeff:             pointer 1
+    .v2g_coeff:             pointer 1
+    .u2b_coeff:             pointer 1
+endstruc
+
 SECTION_RODATA
 
 cextern pw_255
@@ -30,143 +53,71 @@ cextern pb_3
 
 pb_7:        times 8 db 0x07
 pb_e0:       times 8 db 0xe0
+pw_00ff:     times 4 dw 0x00ff
+pw_1024:     times 4 dw 1024
 mmx_redmask: times 8 db 0xf8
 mmx_grnmask: times 8 db 0xfc
 
 SECTION .text
 
-%if 0
-%macro DECLARE_YUV_TO_RGB_FUNCS 3 ; ins, src_fmt, depth
-cglobal yuv420_to_rgb24_%1, 0,0,0, w, h, \
-                                    dst, dst_stride, \
-                                    src_y, src_stride_y, \
-                                    src_u, src_stride_u, \
-                                    src_v, src_stride_v, \
+INIT_MMX mmx
+cglobal yuv420p_to_rgba, 0,0,0
+        pxor        m4, m4
 
-    pxor m4, m4
-    movq (%5, %0, 2), %%mm6
-    movd    (%2, %0), %%mm0
-    movd    (%3, %0), %%mm1
 .loop:
-    /* convert Y, U, V into Y1', Y2', U', V' */
-    movq      m7, m6
-    punpcklbw m0, m4
-    punpcklbw m1, m4
-    pand     m6, [pw_255]
-    psrlw    m7, 8
-    psllw    m0, 3
-    psllw    m1, 3
-    psllw    m6, 3
-    psllw    m7, 3
+        ; YUV to RGB
+        mova        m6, [r2+yuv2rgb_ctx.src_y]              ; Y0 Y1 Y2 Y3 Y4 Y5 Y6 Y7
+        movh        m0, [r2+yuv2rgb_ctx.src_u]              ; U0 U1 U2 U3
+        movh        m1, [r2+yuv2rgb_ctx.src_v]              ; V0 V1 V2 V3
+        mova        m7, m6
+        punpcklbw   m0, m4                                  ; .. U0 .. U1 .. U2 .. U3
+        punpcklbw   m1, m4                                  ; .. V0 .. V1 .. V2 .. V3
+        pand        m6, [pw_00ff]                           ; .. Y1 .. Y3 .. Y5 .. Y7
+        psrlw       m7, 8                                   ; .. Y0 .. Y2 .. Y3 .. Y4
+        psllw       m0, 3                                   ; U scaled by 1<<3
+        psllw       m1, 3                                   ; V scaled by 1<<3
+        psllw       m6, 3                                   ; Y part 1 scaled by 1<<3
+        psllw       m7, 3                                   ; Y part 2 scaled by 1<<3
+        psubsw      m0, [pw_1024]                           ; U offset (128) scaled by 1<<3
+        psubsw      m1, [pw_1024]                           ; V offset (128) scaled by 1<<3
+        psubw       m6, [r2+yuv2rgb_ctx.y_offset]           ; luma offset already scaled by 1<<3
+        psubw       m7, [r2+yuv2rgb_ctx.y_offset]
+        pmulhw      m2, m0, [r2+yuv2rgb_ctx.u2g_coeff]      ; ug  = (u * u2g) >> 16
+        pmulhw      m3, m1, [r2+yuv2rgb_ctx.v2g_coeff]      ; vg  = (v * v2g) >> 16
+        pmulhw      m6,     [r2+yuv2rgb_ctx.y_coeff]        ; y1c = (y1 * y_coeff) >> 16
+        pmulhw      m7,     [r2+yuv2rgb_ctx.y_coeff]        ; y2c = (y2 * y_coeff) >> 16
+        pmulhw      m0,     [r2+yuv2rgb_ctx.u2b_coeff]      ; ub  = (u * u2b) >> 16         (blue)
+        pmulhw      m1,     [r2+yuv2rgb_ctx.v2r_coeff]      ; vr  = (v * v2r) >> 16         (red)
+        paddsw      m2, m3                                  ; ug + vg                       (green)
+        paddsw      m3, m7, m0                              ; m3 = y2c + blue
+        paddsw      m5, m7, m1                              ; m5 = y2c + red
+        paddsw      m7, m2                                  ; m7 = y2c + green
+        paddsw      m0, m6                                  ; m0 = y1c + blue
+        paddsw      m1, m6                                  ; m1 = y1c + red
+        paddsw      m2, m6                                  ; m2 = y1c + green
 
-    psubsw   m0, dither
+        ; RGB pack interleave
+        packuswb    m0, m1
+        packuswb    m3, m5
+        packuswb    m2, m2
+        mova        m1, m0
+        packuswb    m7, m7
+        punpcklbw   m0, m3
+        punpckhbw   m1, m3
+        punpcklbw   m2, m7
 
-    psubsw   "U_OFFSET"(%4), %%mm0
-    psubsw   "V_OFFSET"(%4), %%mm1
-    psubw    "Y_OFFSET"(%4), %%mm6
-    psubw    "Y_OFFSET"(%4), %%mm7
+        pcmpeqd     m3, m3                                  ; set alpha to 0xff
 
-     /* multiply by coefficients */
-    movq      %%mm0, %%mm2
-    movq      %%mm1, %%mm3
-    pmulhw   "UG_COEFF"(%4), %%mm2
-    pmulhw   "VG_COEFF"(%4), %%mm3
-    pmulhw   "Y_COEFF" (%4), %%mm6
-    pmulhw   "Y_COEFF" (%4), %%mm7
-    pmulhw   "UB_COEFF"(%4), %%mm0
-    pmulhw   "VR_COEFF"(%4), %%mm1
-    paddsw    %%mm3, %%mm2
-    /* now: mm0 = UB, mm1 = VR, mm2 = CG */
-    /*      mm6 = Y1, mm7 = Y2 */
+        ; RGB pack 32
+        punpckhbw   m5, m1, m2
+        punpcklbw   m1, m2
+        punpckhbw   m6, m0, m3
+        punpcklbw   m0, m3
+        mova        [r2+yuv2rgb_ctx.dst],    m1
+        mova        [r2+yuv2rgb_ctx.dst+8],  m2
+        mova        [r2+yuv2rgb_ctx.dst+16], m5
+        mova        [r2+yuv2rgb_ctx.dst+24], m3
 
-    /* produce RGB */
-    movq      m3, m7
-    movq      m5, m7
-    paddsw    m3, m0
-    paddsw    m5, m1
-    paddsw    m7, m2
-    paddsw    m0, m6
-    paddsw    m1, m6
-    paddsw    m2, m6
-
-    /* pack and interleave even/odd pixels */
-    packuswb  m0, m1
-    packuswb  m3, m5
-    packuswb  m2, m2
-    movq      m1, m0
-    packuswb  m7, m7
-    punpcklbw m0, m3
-    punpckhbw m1, m3
-    punpcklbw m2, m7
-
-    movq 8 (%5, %0, 2), %%mm6
-    movd 4 (%3, %0),    %%mm1
-    movd 4 (%2, %0),    %%mm0
-
-    add imageq, %3*8
-    add indexd, 4
-    js   .loop
-
-    emms
-
-        : "+r" (index), "+r" (image)                              \
-        : "r" (pu - index), "r" (pv - index), "r"(&c->redDither), \
-          "r" (py - 2*index)                                      \
-          NAMED_CONSTRAINTS_ADD(mmx_00ffw,pb_03,pb_07,mmx_redmask,pb_e0) \
-          RGB_PACK24_B_OPERANDS                                   \
-        : "memory"                                                \
-        );                                                        \
-    }                                                             \
-
-
-#define YUV2RGB_LOOP(depth)                                          \
-    h_size = (c->dstW + 7) & ~7;                                     \
-    if (h_size * depth > FFABS(dstStride[0]))                        \
-        h_size -= 8;                                                 \
-                                                                     \
-    vshift = c->srcFormat != AV_PIX_FMT_YUV422P;                        \
-                                                                     \
-    __asm__ volatile ("pxor %mm4, %mm4\n\t");                        \
-    for (y = 0; y < srcSliceH; y++) {                                \
-        uint8_t *image    = dst[0] + (y + srcSliceY) * dstStride[0]; \
-        const uint8_t *py = src[0] +               y * srcStride[0]; \
-        const uint8_t *pu = src[1] +   (y >> vshift) * srcStride[1]; \
-        const uint8_t *pv = src[2] +   (y >> vshift) * srcStride[2]; \
-        x86_reg index = -h_size / 2;                                 \
-
-%endmacro
-
-
-%macro DECLARE_ALLYUV_TO_RGB_FUNCS 1 ; ins
-INIT_MMX %1
-DECLARE_YUV420P_FUNCS  %1, yuv420p
-DECLARE_YUVA420P_FUNCS %1, yuva420p
-DECLARE_YUV422P_FUNCS  %1, yuv422p
-%endmacro
-
-
-
-static inline int RENAME(yuv420_rgb24)(SwsContext *c, const uint8_t *src[],
-                                       int srcStride[],
-                                       int srcSliceY, int srcSliceH,
-                                       uint8_t *dst[], int dstStride[])
-
-cglobal yuv420_to_rgb24_%1, 2,6,16, dst, stride, mstride, dst2, stride3, mstride3
-
-    int y, h_size, vshift;
-
-    YUV2RGB_LOOP(3)
-
-        YUV2RGB_INITIAL_LOAD
-        YUV2RGB
-        RGB_PACK24(REG_BLUE, REG_RED)
-
-    YUV2RGB_ENDLOOP(3)
-    YUV2RGB_OPERANDS
-    YUV2RGB_ENDFUNC
-
-%endmacro
-
-DECLARE_YUV2RGB_FUNCS mmx
-DECLARE_YUV2RGB_FUNCS mmxext
-%endif
+        sub         r2, 1
+        jne       .loop
+        RET
