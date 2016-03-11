@@ -123,14 +123,22 @@
     add                 v23.8H, v27.8H, v23.8H                          // Y2 + G2
     add                 v24.8H, v26.8H, v24.8H                          // Y1 + B1
     add                 v25.8H, v27.8H, v25.8H                          // Y2 + B2
-    sqrshrun            \r1, v20.8H, #1                                 // clip_u8((Y1 + R1) >> 1)
-    sqrshrun            \r2, v21.8H, #1                                 // clip_u8((Y2 + R1) >> 1)
-    sqrshrun            \g1, v22.8H, #1                                 // clip_u8((Y1 + G1) >> 1)
-    sqrshrun            \g2, v23.8H, #1                                 // clip_u8((Y2 + G1) >> 1)
-    sqrshrun            \b1, v24.8H, #1                                 // clip_u8((Y1 + B1) >> 1)
-    sqrshrun            \b2, v25.8H, #1                                 // clip_u8((Y2 + B1) >> 1)
-    movi                \a1, #255
-    movi                \a2, #255
+    sqrshrun            v\r1\().8B, v20.8H, #1                          // clip_u8((Y1 + R1) >> 1)
+    sqrshrun            v\r2\().8B, v21.8H, #1                          // clip_u8((Y2 + R1) >> 1)
+    sqrshrun            v\g1\().8B, v22.8H, #1                          // clip_u8((Y1 + G1) >> 1)
+    sqrshrun            v\g2\().8B, v23.8H, #1                          // clip_u8((Y2 + G1) >> 1)
+    sqrshrun            v\b1\().8B, v24.8H, #1                          // clip_u8((Y1 + B1) >> 1)
+    sqrshrun            v\b2\().8B, v25.8H, #1                          // clip_u8((Y2 + B1) >> 1)
+    movi                v\a1\().8B, #255
+    movi                v\a2\().8B, #255
+.endm
+
+.macro compute_rgba_ids ofmt fmt r g b a
+    .ifc \ofmt, \fmt
+        .altmacro
+            compute_rgba %(\r+4),%(\g+4),%(\b+4),%(\a+4), %(\r+16),%(\g+16),%(\b+16),%(\a+16)
+        .noaltmacro
+    .endif
 .endm
 
 .macro declare_func ifmt ofmt
@@ -164,23 +172,10 @@ function ff_\ifmt\()_to_\ofmt\()_neon, export=1
     sub                 v27.8H, v27.8H, v3.8H                           // Y2*(1<<3) - y_offset
     sqdmulh             v26.8H, v26.8H, v0.8H                           // ((Y1*(1<<3) - y_offset) * y_coeff) >> 15
     sqdmulh             v27.8H, v27.8H, v0.8H                           // ((Y2*(1<<3) - y_offset) * y_coeff) >> 15
-
-.ifc \ofmt,argb // 1 2 3 0
-    compute_rgba        v5.8B,v6.8B,v7.8B,v4.8B, v17.8B,v18.8B,v19.8B,v16.8B
-.endif
-
-.ifc \ofmt,rgba // 0 1 2 3
-    compute_rgba        v4.8B,v5.8B,v6.8B,v7.8B, v16.8B,v17.8B,v18.8B,v19.8B
-.endif
-
-.ifc \ofmt,abgr // 3 2 1 0
-    compute_rgba        v7.8B,v6.8B,v5.8B,v4.8B, v19.8B,v18.8B,v17.8B,v16.8B
-.endif
-
-.ifc \ofmt,bgra // 2 1 0 3
-    compute_rgba        v6.8B,v5.8B,v4.8B,v7.8B, v18.8B,v17.8B,v16.8B,v19.8B
-.endif
-
+    compute_rgba_ids    \ofmt, argb, 1, 2, 3, 0
+    compute_rgba_ids    \ofmt, rgba, 0, 1, 2, 3
+    compute_rgba_ids    \ofmt, abgr, 3, 2, 1, 0
+    compute_rgba_ids    \ofmt, bgra, 2, 1, 0, 3
     st4                 { v4.8B, v5.8B, v6.8B, v7.8B}, [x2], #32
     st4                 {v16.8B,v17.8B,v18.8B,v19.8B}, [x2], #32
     subs                w8, w8, #16                                     // width -= 16
