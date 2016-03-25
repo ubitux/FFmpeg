@@ -117,11 +117,11 @@
 .endm
 
 .macro compute_rgba r1 g1 b1 a1 r2 g2 b2 a2
-    add                 v20.8H, v26.8H, v20.8H                          // Y1 + R1
+    add                 v20.8H, v26.8H, v21.8H                          // Y1 + R1
     add                 v21.8H, v27.8H, v21.8H                          // Y2 + R2
-    add                 v22.8H, v26.8H, v22.8H                          // Y1 + G1
+    add                 v22.8H, v26.8H, v23.8H                          // Y1 + G1
     add                 v23.8H, v27.8H, v23.8H                          // Y2 + G2
-    add                 v24.8H, v26.8H, v24.8H                          // Y1 + B1
+    add                 v24.8H, v26.8H, v25.8H                          // Y1 + B1
     add                 v25.8H, v27.8H, v25.8H                          // Y2 + B2
     sqrshrun            \r1, v20.8H, #1                                 // clip_u8((Y1 + R1) >> 1)
     sqrshrun            \r2, v21.8H, #1                                 // clip_u8((Y2 + R1) >> 1)
@@ -143,20 +143,14 @@ function ff_\ifmt\()_to_\ofmt\()_neon, export=1
     load_chroma_\ifmt
     sub                 v18.8H, v18.8H, v5.8H                           // U*(1<<3) - 128*(1<<3)
     sub                 v19.8H, v19.8H, v5.8H                           // V*(1<<3) - 128*(1<<3)
-    sqdmulh             v20.8H, v19.8H, v1.H[0]                         // V * v2r            (R)
-    sqdmulh             v22.8H, v18.8H, v1.H[1]                         // U * u2g
+    sqdmulh             v21.8H, v19.8H, v1.H[0]                         // V * v2r            (R)
+    sqdmulh             v23.8H, v18.8H, v1.H[1]                         // U * u2g
     sqdmulh             v19.8H, v19.8H, v1.H[2]                         //           V * v2g
-    add                 v22.8H, v22.8H, v19.8H                          // U * u2g + V * v2g  (G)
-    sqdmulh             v24.8H, v18.8H, v1.H[3]                         // U * u2b            (B)
-    zip2                v21.8H, v20.8H, v20.8H                          // R2
-    zip1                v20.8H, v20.8H, v20.8H                          // R1
-    zip2                v23.8H, v22.8H, v22.8H                          // G2
-    zip1                v22.8H, v22.8H, v22.8H                          // G1
-    zip2                v25.8H, v24.8H, v24.8H                          // B2
-    zip1                v24.8H, v24.8H, v24.8H                          // B1
-    ld1                 {v2.16B}, [x4], #16                             // load luma
-    ushll               v26.8H, v2.8B,  #3                              // Y1*(1<<3)
-    ushll2              v27.8H, v2.16B, #3                              // Y2*(1<<3)
+    add                 v23.8H, v23.8H, v19.8H                          // U * u2g + V * v2g  (G)
+    sqdmulh             v25.8H, v18.8H, v1.H[3]                         // U * u2b            (B)
+    ld2                 {v26.8B, v27.8B}, [x4], #16                     // load luma
+    ushll               v26.8H, v26.8B, #3                              // Y1*(1<<3)
+    ushll               v27.8H, v27.8B, #3                              // Y2*(1<<3)
     sub                 v26.8H, v26.8H, v3.8H                           // Y1*(1<<3) - y_offset
     sub                 v27.8H, v27.8H, v3.8H                           // Y2*(1<<3) - y_offset
     sqdmulh             v26.8H, v26.8H, v0.8H                           // ((Y1*(1<<3) - y_offset) * y_coeff) >> 15
@@ -178,8 +172,17 @@ function ff_\ifmt\()_to_\ofmt\()_neon, export=1
     compute_rgba        v6.8B,v5.8B,v4.8B,v7.8B, v18.8B,v17.8B,v16.8B,v19.8B
 .endif
 
-    st4                 { v4.8B, v5.8B, v6.8B, v7.8B}, [x2], #32
-    st4                 {v16.8B,v17.8B,v18.8B,v19.8B}, [x2], #32
+    zip1                v20.8B, v4.8B, v16.8B
+    zip1                v21.8B, v5.8B, v17.8B
+    zip1                v22.8B, v6.8B, v18.8B
+    zip1                v23.8B, v7.8B, v19.8B
+    st4                 { v20.8B, v21.8B, v22.8B, v23.8B}, [x2], #32
+    zip2                v20.8B, v4.8B, v16.8B
+    zip2                v21.8B, v5.8B, v17.8B
+    zip2                v22.8B, v6.8B, v18.8B
+    zip2                v23.8B, v7.8B, v19.8B
+    st4                 { v20.8B, v21.8B, v22.8B, v23.8B}, [x2], #32
+
     subs                w8, w8, #16                                     // width -= 16
     b.gt                2b
     add                 x2, x2, w3, UXTW                                // dst  += padding
