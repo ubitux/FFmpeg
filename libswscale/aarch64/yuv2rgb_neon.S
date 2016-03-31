@@ -116,21 +116,14 @@
     add                 x13, x13, w14, UXTW                             // srcV += incV
 .endm
 
-.macro compute_rgba r1 g1 b1 a1 r2 g2 b2 a2
-    add                 v20.8H, v26.8H, v21.8H                          // Y1 + R1
-    add                 v21.8H, v27.8H, v21.8H                          // Y2 + R2
-    add                 v22.8H, v26.8H, v23.8H                          // Y1 + G1
-    add                 v23.8H, v27.8H, v23.8H                          // Y2 + G2
-    add                 v24.8H, v26.8H, v25.8H                          // Y1 + B1
-    add                 v25.8H, v27.8H, v25.8H                          // Y2 + B2
-    sqrshrun            \r1, v20.8H, #1                                 // clip_u8((Y1 + R1) >> 1)
-    sqrshrun            \r2, v21.8H, #1                                 // clip_u8((Y2 + R1) >> 1)
-    sqrshrun            \g1, v22.8H, #1                                 // clip_u8((Y1 + G1) >> 1)
-    sqrshrun            \g2, v23.8H, #1                                 // clip_u8((Y2 + G1) >> 1)
-    sqrshrun            \b1, v24.8H, #1                                 // clip_u8((Y1 + B1) >> 1)
-    sqrshrun            \b2, v25.8H, #1                                 // clip_u8((Y2 + B1) >> 1)
-    movi                \a1, #255
-    movi                \a2, #255
+.macro compute_rgba r g b a
+    sqrshrun2           \r\().16B, v21.8H, #1                           // clip_u8((Y2 + R1) >> 1)
+    sqrshrun            \r\().8B,  v20.8H, #1                           // clip_u8((Y1 + R1) >> 1)
+    sqrshrun2           \g\().16B, v23.8H, #1                           // clip_u8((Y2 + G1) >> 1)
+    sqrshrun            \g\().8B,  v22.8H, #1                           // clip_u8((Y1 + G1) >> 1)
+    sqrshrun2           \b\().16B, v25.8H, #1                           // clip_u8((Y2 + B1) >> 1)
+    sqrshrun            \b\().8B,  v24.8H, #1                           // clip_u8((Y1 + B1) >> 1)
+    movi                \a\().16B, #255
 .endm
 
 .macro declare_func ifmt ofmt
@@ -155,32 +148,38 @@ function ff_\ifmt\()_to_\ofmt\()_neon, export=1
     sub                 v27.8H, v27.8H, v3.8H                           // Y2*(1<<3) - y_offset
     sqdmulh             v26.8H, v26.8H, v0.8H                           // ((Y1*(1<<3) - y_offset) * y_coeff) >> 15
     sqdmulh             v27.8H, v27.8H, v0.8H                           // ((Y2*(1<<3) - y_offset) * y_coeff) >> 15
+    add                 v20.8H, v26.8H, v21.8H                          // Y1 + R1
+    add                 v21.8H, v27.8H, v21.8H                          // Y2 + R2
+    add                 v22.8H, v26.8H, v23.8H                          // Y1 + G1
+    add                 v23.8H, v27.8H, v23.8H                          // Y2 + G2
+    add                 v24.8H, v26.8H, v25.8H                          // Y1 + B1
+    add                 v25.8H, v27.8H, v25.8H                          // Y2 + B2
 
-.ifc \ofmt,argb // 1 2 3 0
-    compute_rgba        v5.8B,v6.8B,v7.8B,v4.8B, v17.8B,v18.8B,v19.8B,v16.8B
+.ifc \ofmt,argb
+    compute_rgba        v5,v6,v7,v4
 .endif
 
-.ifc \ofmt,rgba // 0 1 2 3
-    compute_rgba        v4.8B,v5.8B,v6.8B,v7.8B, v16.8B,v17.8B,v18.8B,v19.8B
+.ifc \ofmt,rgba
+    compute_rgba        v4,v5,v6,v7
 .endif
 
-.ifc \ofmt,abgr // 3 2 1 0
-    compute_rgba        v7.8B,v6.8B,v5.8B,v4.8B, v19.8B,v18.8B,v17.8B,v16.8B
+.ifc \ofmt,abgr
+    compute_rgba        v7,v6,v5,v4
 .endif
 
-.ifc \ofmt,bgra // 2 1 0 3
-    compute_rgba        v6.8B,v5.8B,v4.8B,v7.8B, v18.8B,v17.8B,v16.8B,v19.8B
+.ifc \ofmt,bgra
+    compute_rgba        v6,v5,v4,v7
 .endif
 
-    zip1                v20.8B, v4.8B, v16.8B
-    zip1                v21.8B, v5.8B, v17.8B
-    zip1                v22.8B, v6.8B, v18.8B
-    zip1                v23.8B, v7.8B, v19.8B
+    zip1                v20.16B, v4.16B, v4.16B
+    zip1                v21.16B, v5.16B, v5.16B
+    zip1                v22.16B, v6.16B, v6.16B
+    zip1                v23.16B, v7.16B, v7.16B
     st4                 { v20.8B, v21.8B, v22.8B, v23.8B}, [x2], #32
-    zip2                v20.8B, v4.8B, v16.8B
-    zip2                v21.8B, v5.8B, v17.8B
-    zip2                v22.8B, v6.8B, v18.8B
-    zip2                v23.8B, v7.8B, v19.8B
+    zip2                v20.16B, v4.16B, v4.16B
+    zip2                v21.16B, v5.16B, v5.16B
+    zip2                v22.16B, v6.16B, v6.16B
+    zip2                v23.16B, v7.16B, v7.16B
     st4                 { v20.8B, v21.8B, v22.8B, v23.8B}, [x2], #32
 
     subs                w8, w8, #16                                     // width -= 16
