@@ -21,7 +21,8 @@
 #ifndef AVCODEC_MIPS_QPELDSP_MIPS_H
 #define AVCODEC_MIPS_QPELDSP_MIPS_H
 
-#include "../mpegvideo.h"
+#include <stddef.h>
+#include <stdint.h>
 
 void ff_copy_8x8_msa(uint8_t *dst, const uint8_t *src, ptrdiff_t stride);
 void ff_copy_16x16_msa(uint8_t *dst, const uint8_t *src, ptrdiff_t stride);

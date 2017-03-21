@@ -22,7 +22,8 @@
 #ifndef AVCODEC_MIPS_BLOCKDSP_MIPS_H
 #define AVCODEC_MIPS_BLOCKDSP_MIPS_H
 
-#include "../mpegvideo.h"
+#include <stddef.h>
+#include <stdint.h>
 
 void ff_fill_block16_msa(uint8_t *src, uint8_t val, ptrdiff_t stride, int height);
 void ff_fill_block8_msa(uint8_t *src, uint8_t val, ptrdiff_t stride, int height);

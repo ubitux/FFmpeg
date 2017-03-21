@@ -21,7 +21,7 @@
 #ifndef AVCODEC_MIPS_ME_CMP_MIPS_H
 #define AVCODEC_MIPS_ME_CMP_MIPS_H
 
-#include "../mpegvideo.h"
+#include "libavcodec/mpegvideo.h"
 #include "libavcodec/bit_depth_template.c"
 
 int ff_hadamard8_diff8x8_msa(MpegEncContext *s, uint8_t *dst, uint8_t *src,

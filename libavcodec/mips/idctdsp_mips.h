@@ -22,7 +22,8 @@
 #ifndef AVCODEC_MIPS_IDCTDSP_MIPS_H
 #define AVCODEC_MIPS_IDCTDSP_MIPS_H
 
-#include "../mpegvideo.h"
+#include <stddef.h>
+#include <stdint.h>
 
 void ff_put_pixels_clamped_msa(const int16_t *block,
                                uint8_t *av_restrict pixels,
