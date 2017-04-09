@@ -3615,6 +3615,7 @@ case "$toolchain" in
     ;;
     valgrind-*)
         target_exec_default="valgrind"
+        test -n "$valgrind" && target_exec_default="$valgrind"
         case "$toolchain" in
             valgrind-massif)
                 target_exec_args="--tool=massif --alloc-fn=av_malloc --alloc-fn=av_mallocz --alloc-fn=av_calloc --alloc-fn=av_fast_padded_malloc --alloc-fn=av_fast_malloc --alloc-fn=av_realloc_f --alloc-fn=av_fast_realloc --alloc-fn=av_realloc"
