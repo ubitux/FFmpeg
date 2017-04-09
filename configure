@@ -3591,11 +3591,14 @@ case "$toolchain" in
         cc_default="${toolchain%-asan}"
         add_cflags  -fsanitize=address
         add_ldflags -fsanitize=address
+        disable stripping
     ;;
     *-msan)
         cc_default="${toolchain%-msan}"
         add_cflags  -fsanitize=memory -fsanitize-memory-track-origins
         add_ldflags -fsanitize=memory
+        disable stripping
+        disable memory_poisoning
     ;;
     *-tsan)
         cc_default="${toolchain%-tsan}"
@@ -3607,11 +3610,13 @@ case "$toolchain" in
                 add_ldflags -fPIC
                 ;;
         esac
+        disable stripping
     ;;
     *-usan)
         cc_default="${toolchain%-usan}"
         add_cflags  -fsanitize=undefined
         add_ldflags -fsanitize=undefined
+        disable stripping
     ;;
     valgrind-*)
         target_exec_default="valgrind"
@@ -3624,6 +3629,8 @@ case "$toolchain" in
                 target_exec_args="--error-exitcode=1 --malloc-fill=0x2a --track-origins=yes --leak-check=full --gen-suppressions=all --suppressions=$source_path/tests/fate-valgrind.supp"
                 ;;
         esac
+        disable stripping
+        disable memory_poisoning
     ;;
     msvc)
         # Check whether the current MSVC version needs the C99 converter.
@@ -3664,6 +3671,7 @@ case "$toolchain" in
     gcov)
         add_cflags  -fprofile-arcs -ftest-coverage
         add_ldflags -fprofile-arcs -ftest-coverage
+        disable stripping
     ;;
     llvm-cov)
         add_cflags -fprofile-arcs -ftest-coverage
