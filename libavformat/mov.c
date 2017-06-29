@@ -293,6 +293,97 @@ static int mov_metadata_hmmt(MOVContext *c, AVIOContext *pb, unsigned len)
     return 0;
 }
 
+static int mov_metadata_sett(MOVContext *c, AVIOContext *pb, unsigned len)
+{
+    int word;
+    int nb_words;
+    int val;
+    const char *strval;
+
+    nb_words = len / 4;
+    if (nb_words < 1)
+        return 0;
+
+    word = avio_rb32(pb);
+
+    if (nb_words < 2)
+        return 0;
+
+    word = avio_rb32(pb);
+
+    /* range */
+    val = word & 0x1;
+    if (val == 0)
+        strval = "0-255";
+    else if (val == 1)
+        strval = "16-235";
+    else
+        strval = "unknown";
+    av_dict_set(&c->fc->metadata, "gopro_range", strval, 0);
+
+    /* fov */
+    val = (word >> 1) & 0x3;
+    if (val == 0)
+        strval = "wide";
+    else if (val == 1)
+        strval = "medium";
+    else if (val == 2)
+        strval = "narrow";
+    else
+        strval = "unknown";
+
+    av_dict_set(&c->fc->metadata, "gopro_fov", strval, 0);
+
+    /* lens type */
+    val = (word >> 3) & 0x1;
+    if (val == 0)
+        strval = "other";
+    else if (val == 1)
+        strval = "pp_lens or linear fov";
+    else
+        strval = "unknown";
+
+    av_dict_set(&c->fc->metadata, "gopro_lenstype", strval, 0);
+
+    /* low light */
+    val = (word >> 4) & 0x1;
+    if (val == 0)
+        strval = "off";
+    else if (val == 1)
+        strval = "on";
+    else
+        strval = "unknown";
+
+    av_dict_set(&c->fc->metadata, "gopro_lowlight", strval, 0);
+
+    /* superview */
+    val = (word >> 5) & 0x1;
+    if (val == 0)
+        strval = "off";
+    else if (val == 1)
+        strval = "on";
+    else
+        strval = "unknown";
+
+    av_dict_set(&c->fc->metadata, "gopro_superview", strval, 0);
+
+    /* eis */
+    val = (word >> 20) & 0x1;
+    if (val == 0)
+        strval = "off";
+    else if (val == 1)
+        strval = "on";
+    else
+        strval = "unknown";
+
+    av_dict_set(&c->fc->metadata, "gopro_eis", strval, 0);
+
+    if (nb_words < 3)
+        return 0;
+
+    return 0;
+}
+
 static int mov_read_udta_string(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 {
     char tmp_key[5];
@@ -341,6 +432,8 @@ static int mov_read_udta_string(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     case MKTAG( 'p','u','r','d'): key = "purchase_date"; break;
     case MKTAG( 'r','t','n','g'): key = "rating";
         parse = mov_metadata_int8_no_padding; break;
+    case MKTAG( 'S','E','T','T'):
+        return mov_metadata_sett(c, pb, atom.size);
     case MKTAG( 's','o','a','a'): key = "sort_album_artist"; break;
     case MKTAG( 's','o','a','l'): key = "sort_album";   break;
     case MKTAG( 's','o','a','r'): key = "sort_artist";  break;
