@@ -295,91 +295,39 @@ static int mov_metadata_hmmt(MOVContext *c, AVIOContext *pb, unsigned len)
 
 static int mov_metadata_sett(MOVContext *c, AVIOContext *pb, unsigned len)
 {
-    int word;
-    int nb_words;
-    int val;
-    const char *strval;
+    static const enum AVColorRange col_ranges[2] = {AVCOL_RANGE_JPEG, AVCOL_RANGE_MPEG};
+    static const char * const fov[4] = {"wide", "medium", "narrow", "unknown"};
+    static const char * const lens_types[2] = {"other", "pp_lens or linear fov"};
 
-    nb_words = len / 4;
-    if (nb_words < 1)
+    uint32_t data;
+
+    int col_range_id;
+    int fov_id;
+    int lens_type_id;
+    int low_light;
+    int superview;
+    int eis;
+
+    if (len < 8)
         return 0;
 
-    word = avio_rb32(pb);
+    avio_skip(pb, 4);
 
-    if (nb_words < 2)
-        return 0;
+    data = avio_rb32(pb);
 
-    word = avio_rb32(pb);
+    col_range_id =  data        & 1;
+    fov_id       = (data >>  1) & 3;
+    lens_type_id = (data >>  3) & 1;
+    low_light    = (data >>  4) & 1;
+    superview    = (data >>  5) & 1;
+    eis          = (data >> 20) & 1;
 
-    /* range */
-    val = word & 0x1;
-    if (val == 0)
-        strval = "0-255";
-    else if (val == 1)
-        strval = "16-235";
-    else
-        strval = "unknown";
-    av_dict_set(&c->fc->metadata, "gopro_range", strval, 0);
-
-    /* fov */
-    val = (word >> 1) & 0x3;
-    if (val == 0)
-        strval = "wide";
-    else if (val == 1)
-        strval = "medium";
-    else if (val == 2)
-        strval = "narrow";
-    else
-        strval = "unknown";
-
-    av_dict_set(&c->fc->metadata, "gopro_fov", strval, 0);
-
-    /* lens type */
-    val = (word >> 3) & 0x1;
-    if (val == 0)
-        strval = "other";
-    else if (val == 1)
-        strval = "pp_lens or linear fov";
-    else
-        strval = "unknown";
-
-    av_dict_set(&c->fc->metadata, "gopro_lenstype", strval, 0);
-
-    /* low light */
-    val = (word >> 4) & 0x1;
-    if (val == 0)
-        strval = "off";
-    else if (val == 1)
-        strval = "on";
-    else
-        strval = "unknown";
-
-    av_dict_set(&c->fc->metadata, "gopro_lowlight", strval, 0);
-
-    /* superview */
-    val = (word >> 5) & 0x1;
-    if (val == 0)
-        strval = "off";
-    else if (val == 1)
-        strval = "on";
-    else
-        strval = "unknown";
-
-    av_dict_set(&c->fc->metadata, "gopro_superview", strval, 0);
-
-    /* eis */
-    val = (word >> 20) & 0x1;
-    if (val == 0)
-        strval = "off";
-    else if (val == 1)
-        strval = "on";
-    else
-        strval = "unknown";
-
-    av_dict_set(&c->fc->metadata, "gopro_eis", strval, 0);
-
-    if (nb_words < 3)
-        return 0;
+    av_dict_set_int(&c->fc->metadata, "gopro_color_range", col_ranges[col_range_id], 0);
+    av_dict_set    (&c->fc->metadata, "gopro_fov",         fov[fov_id],              0);
+    av_dict_set    (&c->fc->metadata, "gopro_lenstype",    lens_types[lens_type_id], 0);
+    av_dict_set_int(&c->fc->metadata, "gopro_lowlight",    low_light,                0);
+    av_dict_set_int(&c->fc->metadata, "gopro_superview",   superview,                0);
+    av_dict_set_int(&c->fc->metadata, "gopro_eis",         eis,                      0);
 
     return 0;
 }
