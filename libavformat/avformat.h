@@ -317,6 +317,7 @@
 #include <time.h>
 #include <stdio.h>  /* FILE */
 #include "libavcodec/avcodec.h"
+#include "libavutil/buffer.h"
 #include "libavutil/dict.h"
 #include "libavutil/log.h"
 
@@ -1320,6 +1321,24 @@ enum AVDurationEstimationMethod {
     AVFMT_DURATION_FROM_BITRATE ///< Duration estimated from bitrate (less accurate)
 };
 
+enum AVFormatSideDataType {
+    /* Arbitrary user data */
+    AVFMT_DATA_USER,
+};
+
+/**
+ * Structure to hold side data for an AVFormatContext.
+ *
+ * sizeof(AVFormatSideData) is not a part of the public ABI, so new fields may
+ * be added to the end with a minor bump.
+ */
+typedef struct AVFormatSideData {
+    enum AVFormatSideDataType type;
+    uint8_t *data;
+    int      size;
+    AVBufferRef *buf;
+} AVFormatSideData;
+
 typedef struct AVFormatInternal AVFormatInternal;
 
 /**
@@ -1917,6 +1936,9 @@ typedef struct AVFormatContext {
      * - decoding: set by user
      */
     int max_streams;
+
+    AVFormatSideData **side_data;
+    int             nb_side_data;
 } AVFormatContext;
 
 /**
@@ -3000,6 +3022,31 @@ int avformat_transfer_internal_stream_timing_info(const AVOutputFormat *ofmt,
  * @param st  input stream to extract the timebase from
  */
 AVRational av_stream_get_codec_timebase(const AVStream *st);
+
+/**
+ * Add a new side data to a format context.
+ *
+ * @param fmt a format context to which the side data should be added
+ * @param type type of the added side data
+ * @param size size of the side data
+ *
+ * @return newly added side data on success, NULL on error
+ */
+AVFormatSideData *avformat_new_side_data(AVFormatContext *fmt,
+                                         enum AVFormatSideDataType type,
+                                         int size);
+
+/**
+ * @return a pointer to the side data of a given type on success, NULL if there
+ * is no side data with such type in this format.
+ */
+AVFormatSideData *avformat_get_side_data(const AVFormatContext *fmt,
+                                         enum AVFormatSideDataType type);
+
+/**
+ * @return a string identifying the side data type
+ */
+const char *avformat_side_data_name(enum AVFormatSideDataType type);
 
 /**
  * @}
