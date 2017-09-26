@@ -5480,6 +5480,26 @@ static int mov_read_dops(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     return 0;
 }
 
+static int mov_read_udta(MOVContext *c, AVIOContext *pb, MOVAtom atom)
+{
+    if (c->export_udta) {
+        int ret, size = atom.size;
+        int64_t start_pos = avio_tell(pb);
+        AVFormatSideData *sd = avformat_new_side_data(c->fc, AVFMT_DATA_USER, size);
+        if (!sd)
+            return AVERROR(ENOMEM);
+        ret = avio_read(pb, sd->data, size);
+        if (ret < 0)
+            return ret;
+        if (ret != size)
+            av_log(c->fc, AV_LOG_WARNING, "Read %d out of %d bytes of the udta atom\n",
+                   ret, size);
+        avio_seek(pb, start_pos, SEEK_SET);
+    }
+
+    return mov_read_default(c, pb, atom);
+}
+
 static const MOVParseTableEntry mov_default_parse_table[] = {
 { MKTAG('A','C','L','R'), mov_read_aclr },
 { MKTAG('A','P','R','G'), mov_read_avid },
@@ -5537,7 +5557,7 @@ static const MOVParseTableEntry mov_default_parse_table[] = {
 { MKTAG('c','h','a','p'), mov_read_chap },
 { MKTAG('t','r','e','x'), mov_read_trex },
 { MKTAG('t','r','u','n'), mov_read_trun },
-{ MKTAG('u','d','t','a'), mov_read_default },
+{ MKTAG('u','d','t','a'), mov_read_udta },
 { MKTAG('w','a','v','e'), mov_read_wave },
 { MKTAG('e','s','d','s'), mov_read_esds },
 { MKTAG('d','a','c','3'), mov_read_dac3 }, /* AC-3 info */
@@ -6785,6 +6805,8 @@ static const AVOption mov_options[] = {
         .flags = AV_OPT_FLAG_DECODING_PARAM },
     { "decryption_key", "The media decryption key (hex)", OFFSET(decryption_key), AV_OPT_TYPE_BINARY, .flags = AV_OPT_FLAG_DECODING_PARAM },
     { "enable_drefs", "Enable external track support.", OFFSET(enable_drefs), AV_OPT_TYPE_BOOL,
+        {.i64 = 0}, 0, 1, FLAGS },
+    { "export_udta", "export user data box (udta) as side data", OFFSET(export_udta), AV_OPT_TYPE_BOOL,
         {.i64 = 0}, 0, 1, FLAGS },
 
     { NULL },

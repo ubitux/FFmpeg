@@ -266,6 +266,7 @@ typedef struct MOVContext {
     int decryption_key_len;
     int enable_drefs;
     int32_t movie_display_matrix[3][3]; ///< display matrix from mvhd
+    int export_udta;
 } MOVContext;
 
 int ff_mp4_read_descr_len(AVIOContext *pb);
