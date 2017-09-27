@@ -159,6 +159,8 @@ typedef enum {
     SECTION_ID_CHAPTERS,
     SECTION_ID_ERROR,
     SECTION_ID_FORMAT,
+    SECTION_ID_FORMAT_SIDE_DATA_LIST,
+    SECTION_ID_FORMAT_SIDE_DATA,
     SECTION_ID_FORMAT_TAGS,
     SECTION_ID_FRAME,
     SECTION_ID_FRAMES,
@@ -203,8 +205,10 @@ static struct section sections[] = {
     [SECTION_ID_CHAPTER] =            { SECTION_ID_CHAPTER, "chapter", 0, { SECTION_ID_CHAPTER_TAGS, -1 } },
     [SECTION_ID_CHAPTER_TAGS] =       { SECTION_ID_CHAPTER_TAGS, "tags", SECTION_FLAG_HAS_VARIABLE_FIELDS, { -1 }, .element_name = "tag", .unique_name = "chapter_tags" },
     [SECTION_ID_ERROR] =              { SECTION_ID_ERROR, "error", 0, { -1 } },
-    [SECTION_ID_FORMAT] =             { SECTION_ID_FORMAT, "format", 0, { SECTION_ID_FORMAT_TAGS, -1 } },
+    [SECTION_ID_FORMAT] =             { SECTION_ID_FORMAT, "format", 0, { SECTION_ID_FORMAT_TAGS, SECTION_ID_FORMAT_SIDE_DATA_LIST, -1 } },
     [SECTION_ID_FORMAT_TAGS] =        { SECTION_ID_FORMAT_TAGS, "tags", SECTION_FLAG_HAS_VARIABLE_FIELDS, { -1 }, .element_name = "tag", .unique_name = "format_tags" },
+    [SECTION_ID_FORMAT_SIDE_DATA_LIST] = { SECTION_ID_FORMAT_SIDE_DATA_LIST, "side_data_list", SECTION_FLAG_IS_ARRAY, { SECTION_ID_FORMAT_SIDE_DATA, -1 }, .element_name = "side_data", .unique_name = "format_side_data_list" },
+    [SECTION_ID_FORMAT_SIDE_DATA] =   { SECTION_ID_FORMAT_SIDE_DATA, "side_data", 0, { -1 } },
     [SECTION_ID_FRAMES] =             { SECTION_ID_FRAMES, "frames", SECTION_FLAG_IS_ARRAY, { SECTION_ID_FRAME, SECTION_ID_SUBTITLE, -1 } },
     [SECTION_ID_FRAME] =              { SECTION_ID_FRAME, "frame", 0, { SECTION_ID_FRAME_TAGS, SECTION_ID_FRAME_SIDE_DATA_LIST, SECTION_ID_FRAME_LOGS, -1 } },
     [SECTION_ID_FRAME_TAGS] =         { SECTION_ID_FRAME_TAGS, "tags", SECTION_FLAG_HAS_VARIABLE_FIELDS, { -1 }, .element_name = "tag", .unique_name = "frame_tags" },
@@ -2772,6 +2776,7 @@ static int show_chapters(WriterContext *w, InputFile *ifile)
 
 static int show_format(WriterContext *w, InputFile *ifile)
 {
+    int i;
     AVFormatContext *fmt_ctx = ifile->fmt_ctx;
     char val_str[128];
     int64_t size = fmt_ctx->pb ? avio_size(fmt_ctx->pb) : -1;
@@ -2795,6 +2800,20 @@ static int show_format(WriterContext *w, InputFile *ifile)
     print_int("probe_score", av_format_get_probe_score(fmt_ctx));
     if (do_show_format_tags)
         ret = show_tags(w, fmt_ctx->metadata, SECTION_ID_FORMAT_TAGS);
+
+    if (fmt_ctx->nb_side_data) {
+        writer_print_section_header(w, SECTION_ID_FORMAT_SIDE_DATA_LIST);
+        for (i = 0; i < fmt_ctx->nb_side_data; i++) {
+            const AVFormatSideData *sd = fmt_ctx->side_data[i];
+            const char *name = avformat_side_data_name(sd->type);
+
+            writer_print_section_header(w, SECTION_ID_FORMAT_SIDE_DATA);
+            print_str("side_data_type", name ? name : "unknown");
+            print_int("side_data_size", sd->size);
+            writer_print_section_footer(w);
+        }
+        writer_print_section_footer(w);
+    }
 
     writer_print_section_footer(w);
     fflush(stdout);
