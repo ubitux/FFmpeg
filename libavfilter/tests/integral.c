@@ -75,6 +75,7 @@ int main(void)
             compute_unsafe_ssd_integral_image(ii_start2, ii_lz_32,
                                               0, 0,
                                               src, lz,
+                                              src, lz,
                                               xoff, yoff, e, w, h,
                                               ii_w, ii_h);
             display_integral(ii_start2, ii_w, ii_h, ii_lz_32);

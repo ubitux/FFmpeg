@@ -32,7 +32,9 @@
 #include "libavutil/avassert.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
+#include "libavutil/timestamp.h"
 #include "avfilter.h"
+#include "filters.h"
 #include "formats.h"
 #include "internal.h"
 #include "vf_nlmeans.h"
@@ -56,6 +58,7 @@ typedef struct NLMeansContext {
     int patch_size_uv, patch_hsize_uv;          // patch size and half size for chroma planes
     int research_size,    research_hsize;       // research size and half size
     int research_size_uv, research_hsize_uv;    // research size and half size for chroma planes
+    int frame_queue_size;                       // N previous + 1 current + N next number of frames used for patch lookup
     uint32_t *ii_orig;                          // integral image
     uint32_t *ii;                               // integral image starting after the 0-line and 0-column
     int ii_w, ii_h;                             // width and height of the integral image
@@ -65,6 +68,10 @@ typedef struct NLMeansContext {
     float weight_lut[WEIGHT_LUT_SIZE];          // lookup table mapping (scaled) patch differences to their associated weights
     float pdiff_lut_scale;                      // scale factor for patch differences before looking into the LUT
     uint32_t max_meaningful_diff;               // maximum difference considered (if the patch difference is too high we ignore the pixel)
+    AVFrame **frames;                           // array of cached frames
+    int nb_frames;                              // nb cached frames
+    int frames_qpos;                            // position in frames[] the next incoming frame will use
+    int nb_frames_to_filter;                    // number of remaining frames in array to filter
     NLMeansDSPContext dsp;
 } NLMeansContext;
 
@@ -76,6 +83,7 @@ static const AVOption nlmeans_options[] = {
     { "pc", "patch size for chroma planes", OFFSET(patch_size_uv), AV_OPT_TYPE_INT, { .i64 = 0 },     0, 99, FLAGS },
     { "r",  "research window",                   OFFSET(research_size),    AV_OPT_TYPE_INT, { .i64 = 7*2+1 }, 0, 99, FLAGS },
     { "rc", "research window for chroma planes", OFFSET(research_size_uv), AV_OPT_TYPE_INT, { .i64 = 0 },     0, 99, FLAGS },
+    { "n",  "number of frames used to denoise the current one", OFFSET(frame_queue_size), AV_OPT_TYPE_INT, { .i64 = 1 }, 1, 99, FLAGS },
     { NULL }
 };
 
@@ -157,8 +165,10 @@ static void compute_safe_ssd_integral_image_c(uint32_t *dst, ptrdiff_t dst_lines
  * @param dst_linesize_32   integral image linesize (in 32-bit integers unit)
  * @param startx            integral starting x position
  * @param starty            integral starting y position
- * @param src               source plane buffer
- * @param linesize          source plane linesize
+ * @param s1                first source plane buffer
+ * @param linesize1         first source plane linesize
+ * @param s2                second source plane buffer
+ * @param linesize2         second source plane linesize
  * @param offx              source offsetting in x
  * @param offy              source offsetting in y
  * @paran r                 absolute maximum source offsetting
@@ -169,7 +179,8 @@ static void compute_safe_ssd_integral_image_c(uint32_t *dst, ptrdiff_t dst_lines
  */
 static inline void compute_unsafe_ssd_integral_image(uint32_t *dst, ptrdiff_t dst_linesize_32,
                                                      int startx, int starty,
-                                                     const uint8_t *src, ptrdiff_t linesize,
+                                                     const uint8_t *s1, ptrdiff_t linesize1,
+                                                     const uint8_t *s2, ptrdiff_t linesize2,
                                                      int offx, int offy, int r, int sw, int sh,
                                                      int w, int h)
 {
@@ -183,8 +194,8 @@ static inline void compute_unsafe_ssd_integral_image(uint32_t *dst, ptrdiff_t ds
         for (x = startx; x < startx + w; x++) {
             const int s1x = av_clip(x -  r,         0, sw - 1);
             const int s2x = av_clip(x - (r + offx), 0, sw - 1);
-            const uint8_t v1 = src[s1y*linesize + s1x];
-            const uint8_t v2 = src[s2y*linesize + s2x];
+            const uint8_t v1 = s1[s1y*linesize1 + s1x];
+            const uint8_t v2 = s2[s2y*linesize2 + s2x];
             const int d = v1 - v2;
             acc += d * d;
             dst[y*dst_linesize_32 + x] = dst[(y-1)*dst_linesize_32 + x] + acc;
@@ -201,8 +212,10 @@ static inline void compute_unsafe_ssd_integral_image(uint32_t *dst, ptrdiff_t ds
  *                          an additional zeroed top line and column already
  *                          "applied" to the pointer value
  * @param ii_linesize_32    integral image linesize (in 32-bit integers unit)
- * @param src               source plane buffer
- * @param linesize          source plane linesize
+ * @param s1                first source plane buffer
+ * @param linesize1         fist source plane linesize
+ * @param s2                first source plane buffer
+ * @param linesize2         fist source plane linesize
  * @param offx              x-offsetting ranging in [-e;e]
  * @param offy              y-offsetting ranging in [-e;e]
  * @param w                 source width
@@ -211,7 +224,9 @@ static inline void compute_unsafe_ssd_integral_image(uint32_t *dst, ptrdiff_t ds
  */
 static void compute_ssd_integral_image(const NLMeansDSPContext *dsp,
                                        uint32_t *ii, ptrdiff_t ii_linesize_32,
-                                       const uint8_t *src, ptrdiff_t linesize, int offx, int offy,
+                                       const uint8_t *s1, ptrdiff_t linesize1,
+                                       const uint8_t *s2, ptrdiff_t linesize2,
+                                       int offx, int offy,
                                        int e, int w, int h)
 {
     // ii has a surrounding padding of thickness "e"
@@ -243,7 +258,8 @@ static void compute_ssd_integral_image(const NLMeansDSPContext *dsp,
     // top part where only one of s1 and s2 is still readable, or none at all
     compute_unsafe_ssd_integral_image(ii, ii_linesize_32,
                                       0, 0,
-                                      src, linesize,
+                                      s1, linesize1,
+                                      s2, linesize2,
                                       offx, offy, e, w, h,
                                       ii_w, starty_safe);
 
@@ -251,7 +267,8 @@ static void compute_ssd_integral_image(const NLMeansDSPContext *dsp,
     // overlapping one
     compute_unsafe_ssd_integral_image(ii, ii_linesize_32,
                                       0, starty_safe,
-                                      src, linesize,
+                                      s1, linesize1,
+                                      s2, linesize2,
                                       offx, offy, e, w, h,
                                       startx_safe, safe_ph);
 
@@ -262,21 +279,23 @@ static void compute_ssd_integral_image(const NLMeansDSPContext *dsp,
     av_assert1(starty_safe - s2y >= 0); av_assert1(starty_safe - s2y < h);
     if (safe_pw && safe_ph)
         dsp->compute_safe_ssd_integral_image(ii + starty_safe*ii_linesize_32 + startx_safe, ii_linesize_32,
-                                             src + (starty_safe - s1y) * linesize + (startx_safe - s1x), linesize,
-                                             src + (starty_safe - s2y) * linesize + (startx_safe - s2x), linesize,
+                                             s1 + (starty_safe - s1y) * linesize1 + (startx_safe - s1x), linesize1,
+                                             s2 + (starty_safe - s2y) * linesize2 + (startx_safe - s2x), linesize2,
                                              safe_pw, safe_ph);
 
     // right part of the integral
     compute_unsafe_ssd_integral_image(ii, ii_linesize_32,
                                       endx_safe, starty_safe,
-                                      src, linesize,
+                                      s1, linesize1,
+                                      s2, linesize2,
                                       offx, offy, e, w, h,
                                       ii_w - endx_safe, safe_ph);
 
     // bottom part where only one of s1 and s2 is still readable, or none at all
     compute_unsafe_ssd_integral_image(ii, ii_linesize_32,
                                       0, endy_safe,
-                                      src, linesize,
+                                      s1, linesize1,
+                                      s2, linesize2,
                                       offx, offy, e, w, h,
                                       ii_w, ii_h - endy_safe);
 }
@@ -434,21 +453,27 @@ static void weight_averages(uint8_t *dst, ptrdiff_t dst_linesize,
 
 static int nlmeans_plane(AVFilterContext *ctx, int w, int h, int p, int r,
                          uint8_t *dst, ptrdiff_t dst_linesize,
-                         const uint8_t *src, ptrdiff_t src_linesize)
+                         const AVFrame *cur, int plane_id)
 {
-    int offx, offy;
+    int i, offx, offy;
     NLMeansContext *s = ctx->priv;
     /* patches center points cover the whole research window so the patches
      * themselves overflow the research window */
     const int e = r + p;
     /* focus an integral pointer on the centered image (s1) */
     const uint32_t *centered_ii = s->ii + e*s->ii_lz_32 + e;
+    const uint8_t *src = cur->data[plane_id];
+    const ptrdiff_t src_linesize = cur->linesize[plane_id];
 
     memset(s->wa, 0, s->wa_linesize * h * sizeof(*s->wa));
 
+    for (i = 0; i < s->nb_frames; i++) {
+        const AVFrame *cmp_frame = s->frames[i];
+
+    // TODO: reindent
     for (offy = -r; offy <= r; offy++) {
         for (offx = -r; offx <= r; offx++) {
-            if (offx || offy) {
+            if (offx || offy || cur != cmp_frame) {
                 struct thread_data td = {
                     .src          = src + offy*src_linesize + offx,
                     .src_linesize = src_linesize,
@@ -462,11 +487,14 @@ static int nlmeans_plane(AVFilterContext *ctx, int w, int h, int p, int r,
 
                 compute_ssd_integral_image(&s->dsp, s->ii, s->ii_lz_32,
                                            src, src_linesize,
+                                           cmp_frame->data[plane_id],
+                                           cmp_frame->linesize[plane_id],
                                            offx, offy, e, w, h);
                 ctx->internal->execute(ctx, nlmeans_slice, &td, NULL,
                                        FFMIN(td.endy - td.starty, ff_filter_get_nb_threads(ctx)));
             }
         }
+    }
     }
 
     weight_averages(dst, dst_linesize, src, src_linesize,
@@ -475,16 +503,18 @@ static int nlmeans_plane(AVFilterContext *ctx, int w, int h, int p, int r,
     return 0;
 }
 
-static int filter_frame(AVFilterLink *inlink, AVFrame *in)
+static int filter_frame(AVFilterLink *inlink, int cur_frame_pos)
 {
     int i;
     AVFilterContext *ctx = inlink->dst;
     NLMeansContext *s = ctx->priv;
     AVFilterLink *outlink = ctx->outputs[0];
+    const AVFrame *in = s->frames[cur_frame_pos];
+
+    //av_log(0,0,"filter frame %d (pts=%s)\n", cur_frame_pos, av_ts2str(in->pts));
 
     AVFrame *out = ff_get_video_buffer(outlink, outlink->w, outlink->h);
     if (!out) {
-        av_frame_free(&in);
         return AVERROR(ENOMEM);
     }
     av_frame_copy_props(out, in);
@@ -496,11 +526,81 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *in)
         const int r = i ? s->research_hsize_uv : s->research_hsize;
         nlmeans_plane(ctx, w, h, p, r,
                       out->data[i], out->linesize[i],
-                      in->data[i],  in->linesize[i]);
+                      in, i);
     }
 
-    av_frame_free(&in);
+    s->nb_frames_to_filter--;
     return ff_filter_frame(outlink, out);
+}
+
+static int activate(AVFilterContext *ctx)
+{
+    int64_t pts;
+    int i, ret, status;
+    AVFrame *frame = NULL;
+    NLMeansContext *s = ctx->priv;
+    AVFilterLink *inlink = ctx->inputs[0];
+    AVFilterLink *outlink = ctx->outputs[0];
+
+    //av_log(0,0,">>> activate\n");
+    FF_FILTER_FORWARD_STATUS_BACK(outlink, inlink);
+
+    /* Queue is not full, grab a new one from the input */
+    ret = ff_inlink_consume_frame(inlink, &frame);
+    //av_log(0,0,"inlink consume frame: %d\n", ret);
+    if (ret < 0)
+        return ret;
+    if (ret) {
+        /* Replace oldest frame stored with latest obtained */
+        //av_log(0,0,"replace frame %d @ %s with %s\n",
+        //       s->frames_qpos,
+        //       av_ts2str(s->frames[s->frames_qpos]->pts),
+        //       av_ts2str(frame->pts));
+        av_frame_unref(s->frames[s->frames_qpos]);
+        ret = av_frame_ref(s->frames[s->frames_qpos], frame);
+        if (ret < 0)
+            return ret;
+        s->frames_qpos = (s->frames_qpos + 1) % s->frame_queue_size;
+        s->nb_frames = FFMIN(s->nb_frames + 1, s->frame_queue_size);
+        s->nb_frames_to_filter++;
+
+        /* If the queue is full, we can filter one frame */
+        //av_log(0,0,"queue:%d/%d [pos:%d] tofilter:%d\n",
+        //       s->nb_frames, s->frame_queue_size, s->frames_qpos, s->nb_frames_to_filter);
+        if (s->nb_frames == s->frame_queue_size) {
+            const int cur_frame_pos = (s->frames_qpos + s->frame_queue_size - s->nb_frames_to_filter) % s->frame_queue_size;
+            return filter_frame(inlink, cur_frame_pos);
+        }
+    }
+
+    ret = ff_inlink_acknowledge_status(inlink, &status, &pts);
+    //av_log(0,0,"acknowledge status %s for frame pts %s: ret=%d\n", av_err2str(status), av_ts2str(pts), ret);
+    if (ret) {
+        /* Flush */
+        if (status == AVERROR_EOF) {
+            const int start_pos = (s->frames_qpos + s->frame_queue_size - s->nb_frames_to_filter) % s->frame_queue_size;
+            const int nb_frames_to_filter = s->nb_frames_to_filter;
+            //av_log(0,0,"flush %d frames\n", s->nb_frames_to_filter);
+            for (i = 0; i < nb_frames_to_filter; i++) {
+                ret = filter_frame(inlink, (start_pos + i) % s->frame_queue_size);
+                if (ret < 0)
+                    return ret;
+            }
+            av_assert0(s->nb_frames_to_filter == 0);
+        }
+
+        ff_outlink_set_status(outlink, status, pts);
+        return 0;
+    }
+
+    //av_log(0,0,"outlink frame wanted?\n");
+    if (ff_outlink_frame_wanted(outlink)) {
+        //av_log(0,0,"yup, request from inlink\n");
+        ff_inlink_request_frame(inlink);
+        return 0;
+    }
+    //av_log(0,0,"nah, not ready\n");
+    return FFERROR_NOT_READY;
 }
 
 #define CHECK_ODD_FIELD(field, name) do {                       \
@@ -524,6 +624,16 @@ static av_cold int init(AVFilterContext *ctx)
     int i;
     NLMeansContext *s = ctx->priv;
     const double h = s->sigma * 10.;
+
+    CHECK_ODD_FIELD(frame_queue_size, "Frame queue");
+    s->frames = av_mallocz_array(s->frame_queue_size, sizeof(*s->frames));
+    if (!s->frames)
+        return AVERROR(ENOMEM);
+    for (i = 0; i < s->frame_queue_size; i++) {
+        s->frames[i] = av_frame_alloc();
+        if (!s->frames[i])
+            return AVERROR(ENOMEM);
+    }
 
     s->pdiff_scale = 1. / (h * h);
     s->max_meaningful_diff = -log(1/255.) / s->pdiff_scale;
@@ -557,9 +667,12 @@ static av_cold int init(AVFilterContext *ctx)
 
 static av_cold void uninit(AVFilterContext *ctx)
 {
+    int i;
     NLMeansContext *s = ctx->priv;
     av_freep(&s->ii_orig);
     av_freep(&s->wa);
+    for (i = 0; i < s->frame_queue_size; i++)
+        av_frame_free(&s->frames[i]);
 }
 
 static const AVFilterPad nlmeans_inputs[] = {
@@ -567,7 +680,6 @@ static const AVFilterPad nlmeans_inputs[] = {
         .name         = "default",
         .type         = AVMEDIA_TYPE_VIDEO,
         .config_props = config_input,
-        .filter_frame = filter_frame,
     },
     { NULL }
 };
@@ -585,10 +697,11 @@ AVFilter ff_vf_nlmeans = {
     .description   = NULL_IF_CONFIG_SMALL("Non-local means denoiser."),
     .priv_size     = sizeof(NLMeansContext),
     .init          = init,
+    .activate      = activate,
     .uninit        = uninit,
     .query_formats = query_formats,
     .inputs        = nlmeans_inputs,
     .outputs       = nlmeans_outputs,
     .priv_class    = &nlmeans_class,
-    .flags         = AVFILTER_FLAG_SUPPORT_TIMELINE_GENERIC | AVFILTER_FLAG_SLICE_THREADS,
+    .flags         = AVFILTER_FLAG_SLICE_THREADS,
 };
