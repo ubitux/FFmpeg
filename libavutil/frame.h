@@ -219,6 +219,25 @@ typedef struct AVFrameSideData {
     AVBufferRef *buf;
 } AVFrameSideData;
 
+#define AV_NUM_DATA_POINTERS 8
+
+/**
+ * This structure describes decoded subtitle rectangle
+ */
+typedef struct AVFrameSubtitleRectangle {
+    int x, y;
+    int w, h;
+
+    /* image data for bitmap subtitles, in AVFrame.format (AVPixelFormat) */
+    uint8_t *data[AV_NUM_DATA_POINTERS];
+    int linesize[AV_NUM_DATA_POINTERS];
+
+    /* decoded text for text subtitles, in ASS */
+    char *text;
+
+    int flags;
+} AVFrameSubtitleRectangle;
+
 /**
  * Structure describing a single Region Of Interest.
  *
@@ -306,7 +325,6 @@ typedef struct AVRegionOfInterest {
  * for AVFrame can be obtained from avcodec_get_frame_class()
  */
 typedef struct AVFrame {
-#define AV_NUM_DATA_POINTERS 8
     /**
      * pointer to the picture/channel planes.
      * This might be different from the first allocated byte
@@ -348,9 +366,12 @@ typedef struct AVFrame {
      * For packed audio, there is just one data pointer, and linesize[0]
      * contains the total size of the buffer for all channels.
      *
+     * For subtitles, each pointer corresponds to an AVFrameSubtitleRectangle.
+     *
      * Note: Both data and extended_data should always be set in a valid frame,
-     * but for planar audio with more channels that can fit in data,
-     * extended_data must be used in order to access all channels.
+     * but for subtitles and planar audio with more channels that can fit in
+     * data, extended_data must be used in order to access all audio channels
+     * or subtitles rectangles.
      */
     uint8_t **extended_data;
 
@@ -491,10 +512,10 @@ typedef struct AVFrame {
      * also be non-NULL for all j < i.
      *
      * There may be at most one AVBuffer per data plane, so for video this array
-     * always contains all the references. For planar audio with more than
-     * AV_NUM_DATA_POINTERS channels, there may be more buffers than can fit in
-     * this array. Then the extra AVBufferRef pointers are stored in the
-     * extended_buf array.
+     * always contains all the references. For planar audio or subtitles with
+     * more than AV_NUM_DATA_POINTERS channels or rectangles, there may be more
+     * buffers than can fit in this array. Then the extra AVBufferRef pointers
+     * are stored in the extended_buf array.
      */
     AVBufferRef *buf[AV_NUM_DATA_POINTERS];
 
@@ -685,6 +706,29 @@ typedef struct AVFrame {
      * for the target frame's private_ref field.
      */
     AVBufferRef *private_ref;
+
+    /**
+     * Number of rectangles available in extended_data
+     * - encoding: set by user (XXX: no encoding yet)
+     * - decoding: set by libavcodec, read by user
+     */
+    int sub_nb_rects;
+
+    /**
+     * Subtitle start display time in AV_TIME_BASE, relative to pts
+     * XXX: semantic for <=0?
+     * - encoding: unused
+     * - decoding: set by libavcodec, read by user.
+     */
+    int64_t sub_start_display;
+
+    /**
+     * Subtitle end display time in AV_TIME_BASE, relative to pts
+     * XXX: semantic for <=0?
+     * - encoding: unused
+     * - decoding: set by libavcodec, read by user.
+     */
+    int64_t sub_end_display;
 } AVFrame;
 
 #if FF_API_FRAME_GET_SET
@@ -818,6 +862,7 @@ void av_frame_move_ref(AVFrame *dst, AVFrame *src);
  * - format (pixel format for video, sample format for audio)
  * - width and height for video
  * - nb_samples and channel_layout for audio
+ * - sub_nb_rects for subtitle
  *
  * This function will fill AVFrame.data and AVFrame.buf arrays and, if
  * necessary, allocate and fill AVFrame.extended_data and AVFrame.extended_buf.

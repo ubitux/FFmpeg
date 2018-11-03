@@ -278,12 +278,48 @@ fail:
     return ret;
 }
 
+static int get_data_buffer(AVFrame *frame, int n, size_t size)
+{
+    int i;
+
+    if (n > AV_NUM_DATA_POINTERS) {
+        frame->extended_data = av_mallocz_array(n, sizeof(*frame->extended_data));
+        frame->extended_buf  = av_mallocz_array(n - AV_NUM_DATA_POINTERS,
+                                                sizeof(*frame->extended_buf));
+        if (!frame->extended_data || !frame->extended_buf) {
+            av_freep(&frame->extended_data);
+            av_freep(&frame->extended_buf);
+            return AVERROR(ENOMEM);
+        }
+        frame->nb_extended_buf = n - AV_NUM_DATA_POINTERS;
+    } else
+        frame->extended_data = frame->data;
+
+    for (i = 0; i < FFMIN(n, AV_NUM_DATA_POINTERS); i++) {
+        frame->buf[i] = av_buffer_alloc(size);
+        if (!frame->buf[i]) {
+            av_frame_unref(frame);
+            return AVERROR(ENOMEM);
+        }
+        frame->extended_data[i] = frame->data[i] = frame->buf[i]->data;
+    }
+    for (i = 0; i < n - AV_NUM_DATA_POINTERS; i++) {
+        frame->extended_buf[i] = av_buffer_alloc(size);
+        if (!frame->extended_buf[i]) {
+            av_frame_unref(frame);
+            return AVERROR(ENOMEM);
+        }
+        frame->extended_data[i + AV_NUM_DATA_POINTERS] = frame->extended_buf[i]->data;
+    }
+    return 0;
+}
+
 static int get_audio_buffer(AVFrame *frame, int align)
 {
     int channels;
     int planar   = av_sample_fmt_is_planar(frame->format);
     int planes;
-    int ret, i;
+    int ret;
 
     if (!frame->channels)
         frame->channels = av_get_channel_layout_nb_channels(frame->channel_layout);
@@ -300,42 +336,34 @@ static int get_audio_buffer(AVFrame *frame, int align)
             return ret;
     }
 
-    if (planes > AV_NUM_DATA_POINTERS) {
-        frame->extended_data = av_mallocz_array(planes,
-                                          sizeof(*frame->extended_data));
-        frame->extended_buf  = av_mallocz_array((planes - AV_NUM_DATA_POINTERS),
-                                          sizeof(*frame->extended_buf));
-        if (!frame->extended_data || !frame->extended_buf) {
-            av_freep(&frame->extended_data);
-            av_freep(&frame->extended_buf);
-            return AVERROR(ENOMEM);
-        }
-        frame->nb_extended_buf = planes - AV_NUM_DATA_POINTERS;
-    } else
-        frame->extended_data = frame->data;
+    return get_data_buffer(frame, planes, frame->linesize[0]);
+}
 
-    for (i = 0; i < FFMIN(planes, AV_NUM_DATA_POINTERS); i++) {
-        frame->buf[i] = av_buffer_alloc(frame->linesize[0]);
-        if (!frame->buf[i]) {
-            av_frame_unref(frame);
-            return AVERROR(ENOMEM);
-        }
-        frame->extended_data[i] = frame->data[i] = frame->buf[i]->data;
-    }
-    for (i = 0; i < planes - AV_NUM_DATA_POINTERS; i++) {
-        frame->extended_buf[i] = av_buffer_alloc(frame->linesize[0]);
-        if (!frame->extended_buf[i]) {
-            av_frame_unref(frame);
-            return AVERROR(ENOMEM);
-        }
-        frame->extended_data[i + AV_NUM_DATA_POINTERS] = frame->extended_buf[i]->data;
-    }
+/*
+ * For video, we have the pixel format, and dimensions. For audio we have the
+ * sample format and number of samples. But for subtitles, we can at most have
+ * the number of rectangles. As a result, we can not know the size required for
+ * every (not yet allocated) rectangle from the raw format information alone.
+ * This means the actual subtitle bitmap or decoded text is NOT allocated here,
+ * only the holders (rectangles)
+ */
+static int get_subtitle_buffer(AVFrame *frame)
+{
+    int i, ret;
+
+    ret = get_data_buffer(frame, frame->sub_nb_rects, sizeof(AVFrameSubtitleRectangle));
+    if (ret < 0)
+        return ret;
+    for (i = 0; i < frame->sub_nb_rects; i++)
+        memset(frame->extended_data[i], 0, sizeof(AVFrameSubtitleRectangle));
     return 0;
-
 }
 
 int av_frame_get_buffer(AVFrame *frame, int align)
 {
+    if (frame->sub_nb_rects)
+        return get_subtitle_buffer(frame);
+
     if (frame->format < 0)
         return AVERROR(EINVAL);
 
@@ -386,6 +414,8 @@ FF_ENABLE_DEPRECATION_WARNINGS
     dst->colorspace             = src->colorspace;
     dst->color_range            = src->color_range;
     dst->chroma_location        = src->chroma_location;
+    dst->sub_start_display      = src->sub_start_display;
+    dst->sub_end_display        = src->sub_end_display;
 
     av_dict_copy(&dst->metadata, src->metadata, 0);
 
@@ -639,6 +669,7 @@ int av_frame_make_writable(AVFrame *frame)
     tmp.channels       = frame->channels;
     tmp.channel_layout = frame->channel_layout;
     tmp.nb_samples     = frame->nb_samples;
+    tmp.sub_nb_rects   = frame->sub_nb_rects;
 
     if (frame->hw_frames_ctx)
         ret = av_hwframe_get_buffer(frame->hw_frames_ctx, &tmp, 0);
@@ -809,11 +840,57 @@ static int frame_copy_audio(AVFrame *dst, const AVFrame *src)
     return 0;
 }
 
+static int frame_copy_subtitle(AVFrame *dst, const AVFrame *src)
+{
+    int i, ret;
+
+    for (i = 0; i < dst->sub_nb_rects; i++) {
+        const AVFrameSubtitleRectangle *src_rect = (const AVFrameSubtitleRectangle *)src->extended_data[i];
+        AVFrameSubtitleRectangle       *dst_rect = (AVFrameSubtitleRectangle *)dst->extended_data[i];
+
+        memset(dst_rect, 0, sizeof(*dst_rect));
+
+        dst_rect->flags = src_rect->flags;
+
+        if (src->format != AV_PIX_FMT_NONE) {
+            /* (Alloc and) copy bitmap subtitle */
+
+            av_assert1(!src_rect->text);
+
+            dst_rect->x = src_rect->x;
+            dst_rect->y = src_rect->y;
+            dst_rect->w = src_rect->w;
+            dst_rect->h = src_rect->h;
+
+            ret = av_image_alloc(dst_rect->data, dst_rect->linesize,
+                                 dst_rect->w, dst_rect->h,
+                                 dst->format, 0);
+            if (ret < 0)
+                return ret;
+            av_image_copy(dst_rect->data, dst_rect->linesize,
+                          src_rect->data, src_rect->linesize,
+                          dst->format, dst_rect->w, dst_rect->h);
+        } else {
+            /* Copy text subtitle */
+
+            av_assert1(!src_rect->x && !src_rect->y);
+            av_assert1(!src_rect->w && !src_rect->w);
+
+            dst_rect->text = av_strdup(src_rect->text);
+            if (!dst_rect->text)
+                return AVERROR(ENOMEM);
+        }
+    }
+    return 0;
+}
+
 int av_frame_copy(AVFrame *dst, const AVFrame *src)
 {
-    if (dst->format != src->format || dst->format < 0)
+    if (dst->format != src->format || (dst->format < 0 && !dst->sub_nb_rects))
         return AVERROR(EINVAL);
 
+    if (dst->sub_nb_rects)
+        return frame_copy_subtitle(dst, src);
     if (dst->width > 0 && dst->height > 0)
         return frame_copy_video(dst, src);
     else if (dst->nb_samples > 0 && dst->channels > 0)
