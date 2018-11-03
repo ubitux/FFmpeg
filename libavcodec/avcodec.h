@@ -3100,7 +3100,10 @@ int avcodec_decode_video2(AVCodecContext *avctx, AVFrame *picture,
  *                 must be freed with avsubtitle_free if *got_sub_ptr is set.
  * @param[in,out] got_sub_ptr Zero if no subtitle could be decompressed, otherwise, it is nonzero.
  * @param[in] avpkt The input AVPacket containing the input buffer.
+ *
+ * @deprecated Use avcodec_send_packet() and avcodec_receive_frame().
  */
+attribute_deprecated
 int avcodec_decode_subtitle2(AVCodecContext *avctx, AVSubtitle *sub,
                             int *got_sub_ptr,
                             AVPacket *avpkt);
@@ -3691,6 +3694,12 @@ attribute_deprecated
 int avcodec_encode_video2(AVCodecContext *avctx, AVPacket *avpkt,
                           const AVFrame *frame, int *got_packet_ptr);
 
+/**
+ * Encode a subtitle.
+ *
+ * @deprecated use avcodec_send_frame()/avcodec_receive_packet() instead
+ */
+attribute_deprecated
 int avcodec_encode_subtitle(AVCodecContext *avctx, uint8_t *buf, int buf_size,
                             const AVSubtitle *sub);
 
