@@ -524,7 +524,7 @@ FF_ENABLE_DEPRECATION_WARNINGS
         avci->last_pkt_props->dts = AV_NOPTS_VALUE;
     }
 
-    if (got_frame)
+    if (got_frame && avctx->codec->type != AVMEDIA_TYPE_SUBTITLE)
         av_assert0(frame->buf[0]);
 
     return ret < 0 ? ret : 0;
