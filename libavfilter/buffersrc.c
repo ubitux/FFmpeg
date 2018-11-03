@@ -64,6 +64,9 @@ typedef struct BufferSourceContext {
     uint64_t channel_layout;
     char    *channel_layout_str;
 
+    /* subtitle only */
+    int sub_format;
+
     int eof;
 } BufferSourceContext;
 
@@ -130,6 +133,8 @@ int av_buffersrc_parameters_set(AVFilterContext *ctx, AVBufferSrcParameters *par
             s->sample_rate = param->sample_rate;
         if (param->channel_layout)
             s->channel_layout = param->channel_layout;
+        break;
+    case AVMEDIA_TYPE_SUBTITLE:
         break;
     default:
         return AVERROR_BUG;
@@ -220,6 +225,8 @@ static int av_buffersrc_add_frame_internal(AVFilterContext *ctx,
             CHECK_AUDIO_PARAM_CHANGE(ctx, s, frame->sample_rate, frame->channel_layout,
                                      frame->channels, frame->format, frame->pts);
             break;
+        case AVMEDIA_TYPE_SUBTITLE:
+            break;
         default:
             return AVERROR(EINVAL);
         }
@@ -292,6 +299,7 @@ unsigned av_buffersrc_get_nb_failed_requests(AVFilterContext *buffer_src)
 #define OFFSET(x) offsetof(BufferSourceContext, x)
 #define A AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_AUDIO_PARAM
 #define V AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM
+#define S AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_SUBTITLE_PARAM
 
 static const AVOption buffer_options[] = {
     { "width",         NULL,                     OFFSET(w),                AV_OPT_TYPE_INT,      { .i64 = 0 }, 0, INT_MAX, V },
@@ -320,6 +328,17 @@ static const AVOption abuffer_options[] = {
 };
 
 AVFILTER_DEFINE_CLASS(abuffer);
+
+static const AVOption sbuffer_options[] = {
+    { "time_base",      NULL, OFFSET(time_base),  AV_OPT_TYPE_RATIONAL, { .dbl = 0 }, 0, INT_MAX, S },
+    { "format",         NULL, OFFSET(sub_format), AV_OPT_TYPE_INT,      { .i64 = -1 }, -1, 1, S, "format" },
+        { "unspecified", NULL, 0, AV_OPT_TYPE_CONST, {.i64=-1}, INT_MIN, INT_MAX, S, "format" },
+        { "bitmap",      NULL, 0, AV_OPT_TYPE_CONST, {.i64=0},  INT_MIN, INT_MAX, S, "format" },
+        { "text",        NULL, 0, AV_OPT_TYPE_CONST, {.i64=1},  INT_MIN, INT_MAX, S, "format" },
+    { NULL }
+};
+
+AVFILTER_DEFINE_CLASS(sbuffer);
 
 static av_cold int init_audio(AVFilterContext *ctx)
 {
@@ -404,6 +423,10 @@ static int query_formats(AVFilterContext *ctx)
         if ((ret = ff_set_common_channel_layouts(ctx, channel_layouts)) < 0)
             return ret;
         break;
+    case AVMEDIA_TYPE_SUBTITLE:
+        if ((ret = ff_add_format(&formats, c->sub_format)) < 0)
+            return ret;
+        break;
     default:
         return AVERROR(EINVAL);
     }
@@ -431,6 +454,8 @@ static int config_props(AVFilterLink *link)
         if (!c->channel_layout)
             c->channel_layout = link->channel_layout;
         break;
+    case AVMEDIA_TYPE_SUBTITLE:
+        break;
     default:
         return AVERROR(EINVAL);
     }
@@ -448,6 +473,15 @@ static int request_frame(AVFilterLink *link)
         return AVERROR_EOF;
     c->nb_failed_requests++;
     return AVERROR(EAGAIN);
+}
+
+static av_cold int init_subtitle(AVFilterContext *ctx)
+{
+    BufferSourceContext *c = ctx->priv;
+
+    if (!(c->fifo = av_fifo_alloc(sizeof(AVFrame*))))
+        return AVERROR(ENOMEM);
+    return 0;
 }
 
 static const AVFilterPad avfilter_vsrc_buffer_outputs[] = {
@@ -496,4 +530,29 @@ AVFilter ff_asrc_abuffer = {
     .inputs    = NULL,
     .outputs   = avfilter_asrc_abuffer_outputs,
     .priv_class = &abuffer_class,
+};
+
+static const AVFilterPad avfilter_ssrc_sbuffer_outputs[] = {
+    {
+        .name          = "default",
+        .type          = AVMEDIA_TYPE_SUBTITLE,
+        .request_frame = request_frame,
+        .poll_frame    = poll_frame,
+        .config_props  = config_props,
+    },
+    { NULL }
+};
+
+AVFilter ff_ssrc_sbuffer = {
+    .name          = "sbuffer",
+    .description   = NULL_IF_CONFIG_SMALL("Buffer subtitle frames, and make them accessible to the filterchain."),
+    .priv_size     = sizeof(BufferSourceContext),
+    .query_formats = query_formats,
+
+    .init          = init_subtitle,
+    .uninit        = uninit,
+
+    .inputs        = NULL,
+    .outputs       = avfilter_ssrc_sbuffer_outputs,
+    .priv_class    = &sbuffer_class,
 };
