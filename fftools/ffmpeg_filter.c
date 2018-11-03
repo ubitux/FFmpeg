@@ -258,8 +258,10 @@ static void init_input_filter(FilterGraph *fg, AVFilterInOut *in)
     int i;
 
     // TODO: support other filter types
-    if (type != AVMEDIA_TYPE_VIDEO && type != AVMEDIA_TYPE_AUDIO) {
-        av_log(NULL, AV_LOG_FATAL, "Only video and audio filters supported "
+    if (type != AVMEDIA_TYPE_VIDEO &&
+        type != AVMEDIA_TYPE_AUDIO &&
+        type != AVMEDIA_TYPE_SUBTITLE) {
+        av_log(NULL, AV_LOG_FATAL, "Only video, audio and subtitle filters supported "
                "currently.\n");
         exit_program(1);
     }
@@ -674,6 +676,29 @@ static int configure_output_audio_filter(FilterGraph *fg, OutputFilter *ofilter,
     return 0;
 }
 
+static int configure_output_subtitle_filter(FilterGraph *fg, OutputFilter *ofilter, AVFilterInOut *out)
+{
+    OutputStream *ost = ofilter->ost;
+    //OutputFile    *of = output_files[ost->file_index];
+    //AVCodecContext *codec  = ost->enc_ctx;
+    AVFilterContext *last_filter = out->filter_ctx;
+    int pad_idx = out->pad_idx;
+    char name[255];
+    int ret;
+
+    snprintf(name, sizeof(name), "output stream %d:%d", ost->file_index, ost->index);
+    ret = avfilter_graph_create_filter(&ofilter->filter,
+                                       avfilter_get_by_name("sbuffersink"),
+                                       name, NULL, NULL, fg->graph);
+    if (ret < 0)
+        return ret;
+
+    if ((ret = avfilter_link(last_filter, pad_idx, ofilter->filter, 0)) < 0)
+        return ret;
+
+    return 0;
+}
+
 int configure_output_filter(FilterGraph *fg, OutputFilter *ofilter, AVFilterInOut *out)
 {
     if (!ofilter->ost) {
@@ -684,6 +709,7 @@ int configure_output_filter(FilterGraph *fg, OutputFilter *ofilter, AVFilterInOu
     switch (avfilter_pad_get_type(out->filter_ctx->output_pads, out->pad_idx)) {
     case AVMEDIA_TYPE_VIDEO: return configure_output_video_filter(fg, ofilter, out);
     case AVMEDIA_TYPE_AUDIO: return configure_output_audio_filter(fg, ofilter, out);
+    case AVMEDIA_TYPE_SUBTITLE: return configure_output_subtitle_filter(fg, ofilter, out);
     default: av_assert0(0);
     }
 }
@@ -982,6 +1008,69 @@ static int configure_input_audio_filter(FilterGraph *fg, InputFilter *ifilter,
     return 0;
 }
 
+static int configure_input_subtitle_filter(FilterGraph *fg, InputFilter *ifilter,
+                                           AVFilterInOut *in)
+{
+    AVFilterContext *last_filter;
+    const AVFilter *sbuffer_filt = avfilter_get_by_name("sbuffer");
+    InputStream *ist = ifilter->ist;
+    const AVCodecContext *avctx = ist->dec_ctx;
+    //InputFile     *f = input_files[ist->file_index];
+    AVBPrint args;
+    char name[255];
+    int ret; //, pad_idx = 0;
+    //int64_t tsoffset = 0;
+    const AVRational tb = ist->st->time_base;
+
+    // XXX: codec should be opened here so we could access avctx->codec_descriptor
+    const AVCodecDescriptor *codec_desc = avcodec_descriptor_get(avctx->codec_id);
+
+    if (avctx->codec_type != AVMEDIA_TYPE_SUBTITLE) {
+        av_log(NULL, AV_LOG_ERROR, "Cannot connect subtitle filter to %s input\n",
+               av_get_media_type_string(avctx->codec_type));
+        return AVERROR(EINVAL);
+    }
+
+    av_bprint_init(&args, 0, AV_BPRINT_SIZE_AUTOMATIC);
+    av_bprintf(&args, "time_base=%d/%d:format=", tb.num, tb.den);
+
+    if (codec_desc->props & AV_CODEC_PROP_TEXT_SUB)
+        av_bprintf(&args, "text");
+    else if (codec_desc->props & AV_CODEC_PROP_BITMAP_SUB)
+        av_bprintf(&args, "bitmap");
+    else
+        av_bprintf(&args, "unspecified");
+
+    snprintf(name, sizeof(name), "graph %d input from stream %d:%d", fg->index,
+             ist->file_index, ist->st->index);
+
+    if ((ret = avfilter_graph_create_filter(&ifilter->filter, sbuffer_filt,
+                                            name, args.str, NULL,
+                                            fg->graph)) < 0)
+        return ret;
+    last_filter = ifilter->filter;
+
+#if 0
+    snprintf(name, sizeof(name), "trim for input stream %d:%d",
+             ist->file_index, ist->st->index);
+    if (copy_ts) {
+        tsoffset = f->start_time == AV_NOPTS_VALUE ? 0 : f->start_time;
+        if (!start_at_zero && f->ctx->start_time != AV_NOPTS_VALUE)
+            tsoffset += f->ctx->start_time;
+    }
+    ret = insert_trim(((f->start_time == AV_NOPTS_VALUE) || !f->accurate_seek) ?
+                      AV_NOPTS_VALUE : tsoffset, f->recording_time,
+                      &last_filter, &pad_idx, name);
+    if (ret < 0)
+        return ret;
+#endif
+
+    if ((ret = avfilter_link(last_filter, 0, in->filter_ctx, in->pad_idx)) < 0)
+        return ret;
+
+    return 0;
+}
+
 static int configure_input_filter(FilterGraph *fg, InputFilter *ifilter,
                                   AVFilterInOut *in)
 {
@@ -994,6 +1083,7 @@ static int configure_input_filter(FilterGraph *fg, InputFilter *ifilter,
     switch (avfilter_pad_get_type(in->filter_ctx->input_pads, in->pad_idx)) {
     case AVMEDIA_TYPE_VIDEO: return configure_input_video_filter(fg, ifilter, in);
     case AVMEDIA_TYPE_AUDIO: return configure_input_audio_filter(fg, ifilter, in);
+    case AVMEDIA_TYPE_SUBTITLE: return configure_input_subtitle_filter(fg, ifilter, in);
     default: av_assert0(0);
     }
 }

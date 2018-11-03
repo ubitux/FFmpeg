@@ -958,85 +958,59 @@ error:
 
 static void do_subtitle_out(OutputFile *of,
                             OutputStream *ost,
-                            AVSubtitle *sub)
+                            AVFrame *frame)
 {
-    int subtitle_out_max_size = 1024 * 1024;
-    int subtitle_out_size, nb, i;
-    AVCodecContext *enc;
+    AVCodecContext *enc = ost->enc_ctx;
     AVPacket pkt;
-    int64_t pts;
+    int ret;
 
-    if (sub->pts == AV_NOPTS_VALUE) {
-        av_log(NULL, AV_LOG_ERROR, "Subtitle packets must have a pts\n");
-        if (exit_on_error)
-            exit_program(1);
+    av_init_packet(&pkt);
+    pkt.data = NULL;
+    pkt.size = 0;
+
+    if (!check_recording_time(ost))
         return;
+
+    ost->frames_encoded++;
+
+    av_assert0(pkt.size || !pkt.data);
+    update_benchmark(NULL);
+    if (debug_ts) {
+        av_log(NULL, AV_LOG_INFO, "encoder <- type:subtitle "
+               "frame_pts:%s frame_pts_time:%s time_base:%d/%d\n",
+               av_ts2str(frame->pts), av_ts2timestr(frame->pts, &enc->time_base),
+               enc->time_base.num, enc->time_base.den);
     }
 
-    enc = ost->enc_ctx;
+    ret = avcodec_send_frame(enc, frame);
+    if (ret < 0)
+        goto error;
 
-    if (!subtitle_out) {
-        subtitle_out = av_malloc(subtitle_out_max_size);
-        if (!subtitle_out) {
-            av_log(NULL, AV_LOG_FATAL, "Failed to allocate subtitle_out\n");
-            exit_program(1);
-        }
-    }
+    while (1) {
+        ret = avcodec_receive_packet(enc, &pkt);
+        if (ret == AVERROR(EAGAIN))
+            break;
+        if (ret < 0)
+            goto error;
 
-    /* Note: DVB subtitle need one packet to draw them and one other
-       packet to clear them */
-    /* XXX: signal it in the codec context ? */
-    if (enc->codec_id == AV_CODEC_ID_DVB_SUBTITLE)
-        nb = 2;
-    else
-        nb = 1;
+        update_benchmark("encode_subtitle %d.%d", ost->file_index, ost->index);
 
-    /* shift timestamp to honor -ss and make check_recording_time() work with -t */
-    pts = sub->pts;
-    if (output_files[ost->file_index]->start_time != AV_NOPTS_VALUE)
-        pts -= output_files[ost->file_index]->start_time;
-    for (i = 0; i < nb; i++) {
-        unsigned save_num_rects = sub->num_rects;
+        av_packet_rescale_ts(&pkt, enc->time_base, ost->mux_timebase);
 
-        ost->sync_opts = av_rescale_q(pts, AV_TIME_BASE_Q, enc->time_base);
-        if (!check_recording_time(ost))
-            return;
-
-        sub->pts = pts;
-        // start_display_time is required to be 0
-        sub->pts               += av_rescale_q(sub->start_display_time, (AVRational){ 1, 1000 }, AV_TIME_BASE_Q);
-        sub->end_display_time  -= sub->start_display_time;
-        sub->start_display_time = 0;
-        if (i == 1)
-            sub->num_rects = 0;
-
-        ost->frames_encoded++;
-
-        subtitle_out_size = avcodec_encode_subtitle(enc, subtitle_out,
-                                                    subtitle_out_max_size, sub);
-        if (i == 1)
-            sub->num_rects = save_num_rects;
-        if (subtitle_out_size < 0) {
-            av_log(NULL, AV_LOG_FATAL, "Subtitle encoding failed\n");
-            exit_program(1);
+        if (debug_ts) {
+            av_log(NULL, AV_LOG_INFO, "encoder -> type:subtitle "
+                   "pkt_pts:%s pkt_pts_time:%s pkt_dts:%s pkt_dts_time:%s\n",
+                   av_ts2str(pkt.pts), av_ts2timestr(pkt.pts, &enc->time_base),
+                   av_ts2str(pkt.dts), av_ts2timestr(pkt.dts, &enc->time_base));
         }
 
-        av_init_packet(&pkt);
-        pkt.data = subtitle_out;
-        pkt.size = subtitle_out_size;
-        pkt.pts  = av_rescale_q(sub->pts, AV_TIME_BASE_Q, ost->mux_timebase);
-        pkt.duration = av_rescale_q(sub->end_display_time, (AVRational){ 1, 1000 }, ost->mux_timebase);
-        if (enc->codec_id == AV_CODEC_ID_DVB_SUBTITLE) {
-            /* XXX: the pts correction is handled here. Maybe handling
-               it in the codec would be better */
-            if (i == 0)
-                pkt.pts += av_rescale_q(sub->start_display_time, (AVRational){ 1, 1000 }, ost->mux_timebase);
-            else
-                pkt.pts += av_rescale_q(sub->end_display_time, (AVRational){ 1, 1000 }, ost->mux_timebase);
-        }
-        pkt.dts = pkt.pts;
         output_packet(of, &pkt, ost, 0);
     }
+
+    return;
+error:
+    av_log(NULL, AV_LOG_FATAL, "Subtitle encoding failed\n");
+    exit_program(1);
 }
 
 static void do_video_out(OutputFile *of,
@@ -1502,8 +1476,10 @@ static int reap_filters(int flush)
                 }
                 do_audio_out(of, ost, filtered_frame);
                 break;
+            case AVMEDIA_TYPE_SUBTITLE:
+                do_subtitle_out(of, ost, filtered_frame);
+                break;
             default:
-                // TODO support subtitle filters
                 av_assert0(0);
             }
 
@@ -2256,6 +2232,39 @@ static int send_frame_to_filters(InputStream *ist, AVFrame *decoded_frame)
     return ret;
 }
 
+static int decode_subtitle(InputStream *ist, AVPacket *pkt, int *got_output,
+                           int *decode_failed)
+{
+    int ret, err;
+    AVFrame *decoded_frame;
+
+    if (!ist->decoded_frame && !(ist->decoded_frame = av_frame_alloc()))
+        return AVERROR(ENOMEM);
+    if (!ist->filter_frame && !(ist->filter_frame = av_frame_alloc()))
+        return AVERROR(ENOMEM);
+    decoded_frame = ist->decoded_frame;
+
+    update_benchmark(NULL);
+    ret = decode(ist->dec_ctx, decoded_frame, got_output, pkt);
+    update_benchmark("decode_subtitle %d.%d", ist->file_index, ist->st->index);
+    if (ret < 0)
+        *decode_failed = 1;
+
+    if (ret != AVERROR_EOF)
+        check_decode_result(ist, got_output, ret);
+
+    if (!*got_output || ret < 0)
+        return ret;
+
+    ist->frames_decoded++;
+
+    err = send_frame_to_filters(ist, decoded_frame);
+
+    av_frame_unref(ist->filter_frame);
+    av_frame_unref(decoded_frame);
+    return err < 0 ? err : ret;
+}
+
 static int decode_audio(InputStream *ist, AVPacket *pkt, int *got_output,
                         int *decode_failed)
 {
@@ -2451,83 +2460,6 @@ fail:
     return err < 0 ? err : ret;
 }
 
-static int transcode_subtitles(InputStream *ist, AVPacket *pkt, int *got_output,
-                               int *decode_failed)
-{
-    AVSubtitle subtitle;
-    int free_sub = 1;
-    int i, ret = avcodec_decode_subtitle2(ist->dec_ctx,
-                                          &subtitle, got_output, pkt);
-
-    check_decode_result(NULL, got_output, ret);
-
-    if (ret < 0 || !*got_output) {
-        *decode_failed = 1;
-        if (!pkt->size)
-            sub2video_flush(ist);
-        return ret;
-    }
-
-    if (ist->fix_sub_duration) {
-        int end = 1;
-        if (ist->prev_sub.got_output) {
-            end = av_rescale(subtitle.pts - ist->prev_sub.subtitle.pts,
-                             1000, AV_TIME_BASE);
-            if (end < ist->prev_sub.subtitle.end_display_time) {
-                av_log(ist->dec_ctx, AV_LOG_DEBUG,
-                       "Subtitle duration reduced from %"PRId32" to %d%s\n",
-                       ist->prev_sub.subtitle.end_display_time, end,
-                       end <= 0 ? ", dropping it" : "");
-                ist->prev_sub.subtitle.end_display_time = end;
-            }
-        }
-        FFSWAP(int,        *got_output, ist->prev_sub.got_output);
-        FFSWAP(int,        ret,         ist->prev_sub.ret);
-        FFSWAP(AVSubtitle, subtitle,    ist->prev_sub.subtitle);
-        if (end <= 0)
-            goto out;
-    }
-
-    if (!*got_output)
-        return ret;
-
-    if (ist->sub2video.frame) {
-        sub2video_update(ist, INT64_MIN, &subtitle);
-    } else if (ist->nb_filters) {
-        if (!ist->sub2video.sub_queue)
-            ist->sub2video.sub_queue = av_fifo_alloc(8 * sizeof(AVSubtitle));
-        if (!ist->sub2video.sub_queue)
-            exit_program(1);
-        if (!av_fifo_space(ist->sub2video.sub_queue)) {
-            ret = av_fifo_realloc2(ist->sub2video.sub_queue, 2 * av_fifo_size(ist->sub2video.sub_queue));
-            if (ret < 0)
-                exit_program(1);
-        }
-        av_fifo_generic_write(ist->sub2video.sub_queue, &subtitle, sizeof(subtitle), NULL);
-        free_sub = 0;
-    }
-
-    if (!subtitle.num_rects)
-        goto out;
-
-    ist->frames_decoded++;
-
-    for (i = 0; i < nb_output_streams; i++) {
-        OutputStream *ost = output_streams[i];
-
-        if (!check_output_constraints(ist, ost) || !ost->encoding_needed
-            || ost->enc->type != AVMEDIA_TYPE_SUBTITLE)
-            continue;
-
-        do_subtitle_out(output_files[ost->file_index], ost, &subtitle);
-    }
-
-out:
-    if (free_sub)
-        avsubtitle_free(&subtitle);
-    return ret;
-}
-
 static int send_filter_eof(InputStream *ist)
 {
     int i, ret;
@@ -2624,11 +2556,8 @@ static int process_input_packet(InputStream *ist, const AVPacket *pkt, int no_eo
             }
             break;
         case AVMEDIA_TYPE_SUBTITLE:
-            if (repeating)
-                break;
-            ret = transcode_subtitles(ist, &avpkt, &got_output, &decode_failed);
-            if (!pkt && ret >= 0)
-                ret = AVERROR_EOF;
+            ret = decode_subtitle(ist, repeating ? NULL : &avpkt, &got_output,
+                                  &decode_failed);
             break;
         default:
             return -1;

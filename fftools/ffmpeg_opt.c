@@ -1651,8 +1651,13 @@ static char *get_ost_filters(OptionsContext *o, AVFormatContext *oc,
     else if (ost->filters)
         return av_strdup(ost->filters);
 
-    return av_strdup(st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO ?
-                     "null" : "anull");
+    switch (st->codecpar->codec_type) {
+    case AVMEDIA_TYPE_VIDEO:    return av_strdup("null");
+    case AVMEDIA_TYPE_AUDIO:    return av_strdup("anull");
+    case AVMEDIA_TYPE_SUBTITLE: return av_strdup("snull");
+    default:
+        av_assert0(0);
+    }
 }
 
 static void check_streamcopy_filters(OptionsContext *o, AVFormatContext *oc,
@@ -1988,6 +1993,9 @@ static OutputStream *new_subtitle_stream(OptionsContext *o, AVFormatContext *oc,
 
     MATCH_PER_STREAM_OPT(copy_initial_nonkeyframes, i, ost->copy_initial_nonkeyframes, oc, st);
 
+    MATCH_PER_STREAM_OPT(filter_scripts, str, ost->filters_script, oc, st);
+    MATCH_PER_STREAM_OPT(filters,        str, ost->filters,        oc, st);
+
     if (!ost->stream_copy) {
         char *frame_size = NULL;
 
@@ -1996,7 +2004,14 @@ static OutputStream *new_subtitle_stream(OptionsContext *o, AVFormatContext *oc,
             av_log(NULL, AV_LOG_FATAL, "Invalid frame size: %s.\n", frame_size);
             exit_program(1);
         }
+
+        ost->avfilter = get_ost_filters(o, oc, ost);
+        if (!ost->avfilter)
+            exit_program(1);
     }
+
+    if (ost->stream_copy)
+        check_streamcopy_filters(o, oc, ost, AVMEDIA_TYPE_SUBTITLE);
 
     return ost;
 }
@@ -2075,6 +2090,7 @@ static void init_output_filter(OutputFilter *ofilter, OptionsContext *o,
     switch (ofilter->type) {
     case AVMEDIA_TYPE_VIDEO: ost = new_video_stream(o, oc, -1); break;
     case AVMEDIA_TYPE_AUDIO: ost = new_audio_stream(o, oc, -1); break;
+    case AVMEDIA_TYPE_SUBTITLE: ost = new_subtitle_stream(o, oc, -1); break;
     default:
         av_log(NULL, AV_LOG_FATAL, "Only video and audio filters are supported "
                "currently.\n");
@@ -2095,7 +2111,7 @@ static void init_output_filter(OutputFilter *ofilter, OptionsContext *o,
     }
 
     if (ost->avfilter && (ost->filters || ost->filters_script)) {
-        const char *opt = ost->filters ? "-vf/-af/-filter" : "-filter_script";
+        const char *opt = ost->filters ? "-vf/-af/-sf/-filter" : "-filter_script";
         av_log(NULL, AV_LOG_ERROR,
                "%s '%s' was specified through the %s option "
                "for output stream %d:%d, which is fed from a complex filtergraph.\n"
@@ -2478,7 +2494,8 @@ loop_end:
             ist->decoding_needed |= DECODING_FOR_OST;
 
             if (ost->st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO ||
-                ost->st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+                ost->st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO ||
+                ost->st->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE) {
                 err = init_simple_filtergraph(ist, ost);
                 if (err < 0) {
                     av_log(NULL, AV_LOG_ERROR,
@@ -3088,6 +3105,12 @@ static int opt_audio_filters(void *optctx, const char *opt, const char *arg)
 {
     OptionsContext *o = optctx;
     return parse_option(o, "filter:a", arg, options);
+}
+
+static int opt_subtitle_filters(void *optctx, const char *opt, const char *arg)
+{
+    OptionsContext *o = optctx;
+    return parse_option(o, "filter:s", arg, options);
 }
 
 static int opt_vsync(void *optctx, const char *opt, const char *arg)
@@ -3715,6 +3738,8 @@ const OptionDef options[] = {
         "fix subtitles duration" },
     { "canvas_size", OPT_SUBTITLE | HAS_ARG | OPT_STRING | OPT_SPEC | OPT_INPUT, { .off = OFFSET(canvas_sizes) },
         "set canvas size (WxH or abbreviation)", "size" },
+    { "sf",     OPT_SUBTITLE | HAS_ARG | OPT_PERFILE | OPT_OUTPUT, { .func_arg = opt_subtitle_filters },
+        "set subtitle filters", "filter_graph" },
 
     /* grab options */
     { "vc", HAS_ARG | OPT_EXPERT | OPT_VIDEO, { .func_arg = opt_video_channel },
