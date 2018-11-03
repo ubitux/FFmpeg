@@ -496,6 +496,8 @@ OBJS-$(CONFIG_NULLSINK_FILTER)               += vsink_nullsink.o
 # subtitle filters
 OBJS-$(CONFIG_SNULL_FILTER)                  += sf_snull.o
 
+OBJS-$(CONFIG_SNULLSINK_FILTER)              += ssink_snullsink.o
+
 # multimedia filters
 OBJS-$(CONFIG_ABITSCOPE_FILTER)              += avf_abitscope.o
 OBJS-$(CONFIG_ADRAWGRAPH_FILTER)             += f_drawgraph.o
