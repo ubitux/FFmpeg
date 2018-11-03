@@ -163,6 +163,9 @@ static int write_packet(AVFormatContext *s, AVPacket *pkt)
     int hh2, mm2, ss2, ms2;
     DialogueLine *dialogue = av_mallocz(sizeof(*dialogue));
 
+    if (pkt->duration < 0)
+        end = INT64_MAX;
+
     if (!dialogue)
         return AVERROR(ENOMEM);
 
