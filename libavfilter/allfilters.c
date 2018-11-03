@@ -23,6 +23,7 @@
 #include "avfilter.h"
 #include "config.h"
 
+/* audio filters */
 extern AVFilter ff_af_abench;
 extern AVFilter ff_af_acompressor;
 extern AVFilter ff_af_acontrast;
@@ -149,6 +150,7 @@ extern AVFilter ff_asrc_sine;
 
 extern AVFilter ff_asink_anullsink;
 
+/* video filters */
 extern AVFilter ff_vf_addroi;
 extern AVFilter ff_vf_alphaextract;
 extern AVFilter ff_vf_alphamerge;
@@ -471,6 +473,7 @@ extern AVFilter ff_vsrc_yuvtestsrc;
 
 extern AVFilter ff_vsink_nullsink;
 
+/* subtitle filters */
 extern AVFilter ff_sf_snull;
 
 extern AVFilter ff_ssink_snullsink;
