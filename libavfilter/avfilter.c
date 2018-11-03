@@ -354,6 +354,12 @@ int avfilter_config_links(AVFilterContext *filter)
 
                 if (!link->time_base.num && !link->time_base.den)
                     link->time_base = (AVRational) {1, link->sample_rate};
+                break;
+
+            case AVMEDIA_TYPE_SUBTITLE:
+                if (!link->time_base.num && !link->time_base.den)
+                    link->time_base = inlink ? inlink->time_base : AV_TIME_BASE_Q;
+                break;
             }
 
             if (link->src->nb_inputs && link->src->inputs[0]->hw_frames_ctx &&
@@ -1104,6 +1110,8 @@ int ff_filter_frame(AVFilterLink *link, AVFrame *frame)
             av_assert1(frame->width               == link->w);
             av_assert1(frame->height               == link->h);
         }
+    } else if (link->type == AVMEDIA_TYPE_SUBTITLE) {
+        // TODO?
     } else {
         if (frame->format != link->format) {
             av_log(link->dst, AV_LOG_ERROR, "Format change is not supported\n");

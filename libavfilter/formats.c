@@ -363,6 +363,10 @@ AVFilterFormats *ff_all_formats(enum AVMediaType type)
                 return NULL;
             fmt++;
         }
+    } else if (type == AVMEDIA_TYPE_SUBTITLE) {
+        if (ff_add_format(&ret, 0 /* bitmap */) < 0 ||
+            ff_add_format(&ret, 1 /* text */) < 0)
+            return NULL;
     }
 
     return ret;

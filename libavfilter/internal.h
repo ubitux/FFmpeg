@@ -132,6 +132,14 @@ struct AVFilterPad {
      * input pads only.
      */
     int needs_writable;
+
+    /**
+     * Callback function to get a subtitle frame. If NULL, the filter system
+     * will use ff_default_get_subtitle_buffer().
+     *
+     * Input subtitle pads only.
+     */
+    AVFrame *(*get_subtitle_buffer)(AVFilterLink *link, int nb_rects);
 };
 
 struct AVFilterGraphInternal {
