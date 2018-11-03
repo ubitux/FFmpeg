@@ -471,6 +471,8 @@ extern AVFilter ff_vsrc_yuvtestsrc;
 
 extern AVFilter ff_vsink_nullsink;
 
+extern AVFilter ff_sf_snull;
+
 /* multimedia filters */
 extern AVFilter ff_avf_abitscope;
 extern AVFilter ff_avf_adrawgraph;
