@@ -509,6 +509,7 @@ extern  AVFilter ff_ssink_sbuffer;
 extern  AVFilter ff_vsink_buffer;
 extern AVFilter ff_af_afifo;
 extern AVFilter ff_vf_fifo;
+extern AVFilter ff_sf_sfifo;
 
 #include "libavfilter/filter_list.c"
 

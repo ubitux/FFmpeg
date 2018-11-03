@@ -307,3 +307,34 @@ AVFilter ff_af_afifo = {
     .inputs      = avfilter_af_afifo_inputs,
     .outputs     = avfilter_af_afifo_outputs,
 };
+
+static const AVFilterPad avfilter_sf_sfifo_inputs[] = {
+    {
+        .name             = "default",
+        .type             = AVMEDIA_TYPE_SUBTITLE,
+        .filter_frame     = add_to_queue,
+    },
+    { NULL }
+};
+
+static const AVFilterPad avfilter_sf_sfifo_outputs[] = {
+    {
+        .name          = "default",
+        .type          = AVMEDIA_TYPE_SUBTITLE,
+        .request_frame = request_frame,
+    },
+    { NULL }
+};
+
+AVFilter ff_sf_sfifo = {
+    .name        = "sfifo",
+    .description = NULL_IF_CONFIG_SMALL("Buffer input subtitles and send them when they are requested."),
+
+    .init      = init,
+    .uninit    = uninit,
+
+    .priv_size = sizeof(FifoContext),
+
+    .inputs    = avfilter_sf_sfifo_inputs,
+    .outputs   = avfilter_sf_sfifo_outputs,
+};
