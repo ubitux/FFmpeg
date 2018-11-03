@@ -364,9 +364,10 @@ AVFilterFormats *ff_all_formats(enum AVMediaType type)
             fmt++;
         }
     } else if (type == AVMEDIA_TYPE_SUBTITLE) {
-        if (ff_add_format(&ret, 0 /* bitmap */) < 0 ||
-            ff_add_format(&ret, 1 /* text */) < 0)
+        if (ff_add_format(&ret, AV_SUBTITLE_FMT_BITMAP) < 0 ||
+            ff_add_format(&ret, AV_SUBTITLE_FMT_TEXT) < 0)
             return NULL;
+        av_log(0,0,"inserted all subtitles formats\n");
     }
 
     return ret;

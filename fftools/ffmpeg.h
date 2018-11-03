@@ -41,6 +41,7 @@
 #include "libavutil/hwcontext.h"
 #include "libavutil/pixfmt.h"
 #include "libavutil/rational.h"
+#include "libavutil/subtitlefmt.h"
 #include "libavutil/thread.h"
 #include "libavutil/threadmessage.h"
 
@@ -245,12 +246,17 @@ typedef struct InputFilter {
     // parameters configured for this input
     int format;
 
+    /* video */
     int width, height;
     AVRational sample_aspect_ratio;
 
+    /* audio */
     int sample_rate;
     int channels;
     uint64_t channel_layout;
+
+    /* subtitle */
+    enum AVPixelFormat sub_pixfmt; // bitmap sub only
 
     AVBufferRef *hw_frames_ctx;
 

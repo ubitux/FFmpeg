@@ -36,4 +36,12 @@
  */
 int ff_encode_get_frame(AVCodecContext *avctx, AVFrame *frame);
 
+/**
+ * Legacy convertion helper
+ */
+int ff_compat_encode_subtitle_frame(AVCodecContext *avctx,
+                                    AVPacket *avpkt,
+                                    const AVFrame *frame,
+                                    int *got_packet_ptr);
+
 #endif /* AVCODEC_ENCODE_H */

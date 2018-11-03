@@ -33,6 +33,7 @@
 #include "dict.h"
 #include "rational.h"
 #include "samplefmt.h"
+#include "subtitlefmt.h"
 #include "pixfmt.h"
 #include "version.h"
 
@@ -397,7 +398,7 @@ typedef struct AVFrame {
     /**
      * format of the frame, -1 if unknown or unset
      * Values correspond to enum AVPixelFormat for video frames,
-     * enum AVSampleFormat for audio)
+     * enum AVSampleFormat for audio, enum AVSubtitleFormat for subtitle)
      */
     int format;
 
@@ -706,6 +707,12 @@ typedef struct AVFrame {
      * for the target frame's private_ref field.
      */
     AVBufferRef *private_ref;
+
+    /**
+     * Bitmap subtitle format for the rectangles if format is
+     * AV_SUBTITLE_FMT_BITMAP.
+     */
+    enum AVPixelFormat sub_pixfmt;
 
     /**
      * Number of rectangles available in extended_data

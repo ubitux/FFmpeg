@@ -163,6 +163,8 @@ static int write_packet(AVFormatContext *s, AVPacket *pkt)
     int hh2, mm2, ss2, ms2;
     DialogueLine *dialogue = av_mallocz(sizeof(*dialogue));
 
+    av_log(0,0,"pkt->duration=%"PRId64"\n", pkt->duration);
+
     if (pkt->duration < 0)
         end = INT64_MAX;
 

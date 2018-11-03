@@ -19,6 +19,7 @@ OBJS = allfilters.o                                                     \
        framequeue.o                                                     \
        graphdump.o                                                      \
        graphparser.o                                                    \
+       subtitle.o                                                       \
        transform.o                                                      \
        video.o                                                          \
 
@@ -495,6 +496,7 @@ OBJS-$(CONFIG_NULLSINK_FILTER)               += vsink_nullsink.o
 
 # subtitle filters
 OBJS-$(CONFIG_SNULL_FILTER)                  += sf_snull.o
+OBJS-$(CONFIG_STRIM_FILTER)                  += trim.o
 
 OBJS-$(CONFIG_SNULLSINK_FILTER)              += ssink_snullsink.o
 

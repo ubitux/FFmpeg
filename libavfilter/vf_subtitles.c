@@ -66,7 +66,7 @@ typedef struct AssContext {
 #define FLAGS AV_OPT_FLAG_FILTERING_PARAM|AV_OPT_FLAG_VIDEO_PARAM
 
 #define COMMON_OPTIONS \
-    {"filename",       "set the filename of file to read",                         OFFSET(filename),   AV_OPT_TYPE_STRING,     {.str = NULL},  0, 0, FLAGS }, \
+    {"filename",       "set the filename of file to read",                         OFFSET(filename),   AV_OPT_TYPE_STRING,     {.str = NULL},  0, 0, FLAGS | AV_OPT_FLAG_DEPRECATED }, \
     {"f",              "set the filename of file to read",                         OFFSET(filename),   AV_OPT_TYPE_STRING,     {.str = NULL},  0, 0, FLAGS }, \
     {"original_size",  "set the size of the original video (used to scale fonts)", OFFSET(original_w), AV_OPT_TYPE_IMAGE_SIZE, {.str = NULL},  0, 0, FLAGS }, \
     {"fontsdir",       "set the directory containing the fonts to read",           OFFSET(fontsdir),   AV_OPT_TYPE_STRING,     {.str = NULL},  0, 0, FLAGS }, \
@@ -97,11 +97,6 @@ static void ass_log(int ass_level, const char *fmt, va_list args, void *ctx)
 static av_cold int init(AVFilterContext *ctx)
 {
     AssContext *ass = ctx->priv;
-
-    if (!ass->filename) {
-        av_log(ctx, AV_LOG_ERROR, "No filename provided!\n");
-        return AVERROR(EINVAL);
-    }
 
     ass->library = ass_library_init();
     if (!ass->library) {
@@ -215,6 +210,7 @@ static const AVFilterPad ass_outputs[] = {
 #if CONFIG_ASS_FILTER
 
 static const AVOption ass_options[] = {
+    {"filename", "set the filename of file to read", OFFSET(filename), AV_OPT_TYPE_STRING, {.str = NULL}, CHAR_MIN, CHAR_MAX, FLAGS },
     COMMON_OPTIONS
     {"shaping", "set shaping engine", OFFSET(shaping), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, 1, FLAGS, "shaping_mode"},
         {"auto", NULL,                 0, AV_OPT_TYPE_CONST, {.i64 = -1},                  INT_MIN, INT_MAX, FLAGS, "shaping_mode"},
@@ -232,6 +228,11 @@ static av_cold int init_ass(AVFilterContext *ctx)
 
     if (ret < 0)
         return ret;
+
+    if (!ass->filename) {
+        av_log(ctx, AV_LOG_ERROR, "No filename provided!\n");
+        return AVERROR(EINVAL);
+    }
 
     /* Initialize fonts */
     ass_set_fonts(ass->renderer, NULL, NULL, 1, NULL, 1);
@@ -262,6 +263,7 @@ AVFilter ff_vf_ass = {
 #if CONFIG_SUBTITLES_FILTER
 
 static const AVOption subtitles_options[] = {
+    {"filename", "use an input stream instead", OFFSET(filename), AV_OPT_TYPE_STRING, {.str = NULL}, CHAR_MIN, CHAR_MAX, FLAGS | AV_OPT_FLAG_DEPRECATED},
     COMMON_OPTIONS
     {"charenc",      "set input character encoding", OFFSET(charenc),      AV_OPT_TYPE_STRING, {.str = NULL}, 0, 0, FLAGS},
     {"stream_index", "set stream index",             OFFSET(stream_index), AV_OPT_TYPE_INT,    { .i64 = -1 }, -1,       INT_MAX,  FLAGS},
@@ -295,7 +297,7 @@ static int attachment_is_font(AVStream * st)
 
 AVFILTER_DEFINE_CLASS(subtitles);
 
-static av_cold int init_subtitles(AVFilterContext *ctx)
+static av_cold int init_subtitles_from_filename(AVFilterContext *ctx)
 {
     int j, ret, sid;
     int k = 0;
@@ -307,16 +309,6 @@ static av_cold int init_subtitles(AVFilterContext *ctx)
     AVStream *st;
     AVPacket pkt;
     AssContext *ass = ctx->priv;
-
-    /* Init libass */
-    ret = init(ctx);
-    if (ret < 0)
-        return ret;
-    ass->track = ass_new_track(ass->library);
-    if (!ass->track) {
-        av_log(ctx, AV_LOG_ERROR, "Could not create a libass track\n");
-        return AVERROR(EINVAL);
-    }
 
     /* Open subtitles file */
     ret = avformat_open_input(&fmt, ass->filename, NULL, NULL);
@@ -419,27 +411,6 @@ static av_cold int init_subtitles(AVFilterContext *ctx)
     if (ret < 0)
         goto end;
 
-    if (ass->force_style) {
-        char **list = NULL;
-        char *temp = NULL;
-        char *ptr = av_strtok(ass->force_style, ",", &temp);
-        int i = 0;
-        while (ptr) {
-            av_dynarray_add(&list, &i, ptr);
-            if (!list) {
-                ret = AVERROR(ENOMEM);
-                goto end;
-            }
-            ptr = av_strtok(NULL, ",", &temp);
-        }
-        av_dynarray_add(&list, &i, NULL);
-        if (!list) {
-            ret = AVERROR(ENOMEM);
-            goto end;
-        }
-        ass_set_style_overrides(ass->library, list);
-        av_free(list);
-    }
     /* Decode subtitles and push them into the renderer (libass) */
     if (dec_ctx->subtitle_header)
         ass_process_codec_private(ass->track,
@@ -480,6 +451,64 @@ end:
     av_dict_free(&codec_opts);
     avcodec_free_context(&dec_ctx);
     avformat_close_input(&fmt);
+    return ret;
+}
+
+static av_cold int init_subtitles(AVFilterContext *ctx)
+{
+    int ret = 0;
+    AssContext *ass = ctx->priv;
+
+    /* TODO: when the deprecated filename option is removed, the input pad
+     * will not need to be dynamic anymore */
+    AVFilterPad pad = {
+        .type = AVMEDIA_TYPE_SUBTITLE,
+        .name = "default",
+    };
+
+    /* Init libass */
+    ret = init(ctx);
+    if (ret < 0)
+        return ret;
+    ass->track = ass_new_track(ass->library);
+    if (!ass->track) {
+        av_log(ctx, AV_LOG_ERROR, "Could not create a libass track\n");
+        return AVERROR(EINVAL);
+    }
+
+    /* Initialize fonts */
+    ass_set_fonts(ass->renderer, NULL, NULL, 1, NULL, 1);
+
+    if (ass->force_style) {
+        char **list = NULL;
+        char *temp = NULL;
+        char *ptr = av_strtok(ass->force_style, ",", &temp);
+        int i = 0;
+        while (ptr) {
+            av_dynarray_add(&list, &i, ptr);
+            if (!list) {
+                ret = AVERROR(ENOMEM);
+                goto end;
+            }
+            ptr = av_strtok(NULL, ",", &temp);
+        }
+        av_dynarray_add(&list, &i, NULL);
+        if (!list) {
+            ret = AVERROR(ENOMEM);
+            goto end;
+        }
+        ass_set_style_overrides(ass->library, list);
+        av_free(list);
+    }
+
+    if (ass->filename)
+        return init_subtitles_from_filename(ctx);
+
+    // TODO/FIXME: ass_process_codec_private()
+
+    ret = ff_insert_inpad(ctx, 0, &pad);
+
+end:
     return ret;
 }
 

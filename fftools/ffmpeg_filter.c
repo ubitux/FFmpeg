@@ -199,6 +199,8 @@ int init_simple_filtergraph(InputStream *ist, OutputStream *ost)
 {
     FilterGraph *fg = av_mallocz(sizeof(*fg));
 
+    av_log(0,0,"init_simple_filtergraph\n");
+
     if (!fg)
         exit_program(1);
     fg->index = nb_filtergraphs;
@@ -389,7 +391,9 @@ static int insert_trim(int64_t start_time, int64_t duration,
     AVFilterContext *ctx;
     const AVFilter *trim;
     enum AVMediaType type = avfilter_pad_get_type((*last_filter)->output_pads, *pad_idx);
-    const char *name = (type == AVMEDIA_TYPE_VIDEO) ? "trim" : "atrim";
+    const char *name = (type == AVMEDIA_TYPE_VIDEO) ? "trim"
+                     : (type == AVMEDIA_TYPE_AUDIO) ? "atrim"
+                                                    : "strim";
     int ret = 0;
 
     if (duration == INT64_MAX && start_time == AV_NOPTS_VALUE)
@@ -799,7 +803,8 @@ static int configure_input_video_filter(FilterGraph *fg, InputFilter *ifilter,
     par->format = AV_PIX_FMT_NONE;
 
     if (ist->dec_ctx->codec_type == AVMEDIA_TYPE_AUDIO) {
-        av_log(NULL, AV_LOG_ERROR, "Cannot connect video filter to audio input\n");
+        av_log(NULL, AV_LOG_ERROR, "Cannot connect video filter to %s input\n",
+               av_get_media_type_string(ist->dec_ctx->codec_type));
         ret = AVERROR(EINVAL);
         goto fail;
     }
@@ -911,7 +916,8 @@ static int configure_input_audio_filter(FilterGraph *fg, InputFilter *ifilter,
     int64_t tsoffset = 0;
 
     if (ist->dec_ctx->codec_type != AVMEDIA_TYPE_AUDIO) {
-        av_log(NULL, AV_LOG_ERROR, "Cannot connect audio filter to non audio input\n");
+        av_log(NULL, AV_LOG_ERROR, "Cannot connect audio filter to %s input\n",
+               av_get_media_type_string(ist->dec_ctx->codec_type));
         return AVERROR(EINVAL);
     }
 
@@ -1014,44 +1020,38 @@ static int configure_input_subtitle_filter(FilterGraph *fg, InputFilter *ifilter
     AVFilterContext *last_filter;
     const AVFilter *sbuffer_filt = avfilter_get_by_name("sbuffer");
     InputStream *ist = ifilter->ist;
-    const AVCodecContext *avctx = ist->dec_ctx;
-    //InputFile     *f = input_files[ist->file_index];
+    InputFile     *f = input_files[ist->file_index];
     AVBPrint args;
     char name[255];
-    int ret; //, pad_idx = 0;
-    //int64_t tsoffset = 0;
+    int ret, pad_idx = 0;
+    int64_t tsoffset = 0;
     const AVRational tb = ist->st->time_base;
 
-    // XXX: codec should be opened here so we could access avctx->codec_descriptor
-    const AVCodecDescriptor *codec_desc = avcodec_descriptor_get(avctx->codec_id);
-
-    if (avctx->codec_type != AVMEDIA_TYPE_SUBTITLE) {
+    if (ist->dec_ctx->codec_type != AVMEDIA_TYPE_SUBTITLE) {
         av_log(NULL, AV_LOG_ERROR, "Cannot connect subtitle filter to %s input\n",
-               av_get_media_type_string(avctx->codec_type));
+               av_get_media_type_string(ist->dec_ctx->codec_type));
         return AVERROR(EINVAL);
     }
 
     av_bprint_init(&args, 0, AV_BPRINT_SIZE_AUTOMATIC);
-    av_bprintf(&args, "time_base=%d/%d:format=", tb.num, tb.den);
-
-    if (codec_desc->props & AV_CODEC_PROP_TEXT_SUB)
-        av_bprintf(&args, "text");
-    else if (codec_desc->props & AV_CODEC_PROP_BITMAP_SUB)
-        av_bprintf(&args, "bitmap");
-    else
-        av_bprintf(&args, "unspecified");
+    av_log(0,0,"sbuffer ifilter->format=%d (%s)\n",
+           ifilter->format, av_get_subtitle_fmt_name(ifilter->format));
+    av_bprintf(&args, "time_base=%d/%d:subtitle_fmt=%s",
+               tb.num, tb.den, av_get_subtitle_fmt_name(ifilter->format));
 
     snprintf(name, sizeof(name), "graph %d input from stream %d:%d", fg->index,
              ist->file_index, ist->st->index);
 
+    av_log(0,0,"avfilter graph create filter with sbbuffer_filter=%p\n", sbuffer_filt);
     if ((ret = avfilter_graph_create_filter(&ifilter->filter, sbuffer_filt,
                                             name, args.str, NULL,
-                                            fg->graph)) < 0)
+                                            fg->graph)) < 0) {
+        av_log(0,0,"nah.\n");
         return ret;
+    }
     last_filter = ifilter->filter;
 
-#if 0
-    snprintf(name, sizeof(name), "trim for input stream %d:%d",
+    snprintf(name, sizeof(name), "strim for input stream %d:%d",
              ist->file_index, ist->st->index);
     if (copy_ts) {
         tsoffset = f->start_time == AV_NOPTS_VALUE ? 0 : f->start_time;
@@ -1063,17 +1063,18 @@ static int configure_input_subtitle_filter(FilterGraph *fg, InputFilter *ifilter
                       &last_filter, &pad_idx, name);
     if (ret < 0)
         return ret;
-#endif
 
     if ((ret = avfilter_link(last_filter, 0, in->filter_ctx, in->pad_idx)) < 0)
         return ret;
 
+    av_log(0,0,"ok configure_input_subtitle_filter\n");
     return 0;
 }
 
 static int configure_input_filter(FilterGraph *fg, InputFilter *ifilter,
                                   AVFilterInOut *in)
 {
+    av_log(0,0,"configure input filter\n");
     if (!ifilter->ist->dec) {
         av_log(NULL, AV_LOG_ERROR,
                "No decoder for stream #%d:%d, filtering impossible\n",
@@ -1105,6 +1106,7 @@ int configure_filtergraph(FilterGraph *fg)
     const char *graph_desc = simple ? fg->outputs[0]->ost->avfilter :
                                       fg->graph_desc;
 
+    av_log(0,0,"configure_filtergraph with desc=%s\n", graph_desc);
     cleanup_filtergraph(fg);
     if (!(fg->graph = avfilter_graph_alloc()))
         return AVERROR(ENOMEM);
@@ -1149,8 +1151,10 @@ int configure_filtergraph(FilterGraph *fg)
         fg->graph->nb_threads = filter_complex_nbthreads;
     }
 
+    av_log(0,0,"graph parse\n");
     if ((ret = avfilter_graph_parse2(fg->graph, graph_desc, &inputs, &outputs)) < 0)
         goto fail;
+    av_log(0,0,"graph parse ret=%d\n", ret);
 
     ret = hw_device_setup_for_filter(fg);
     if (ret < 0)
@@ -1274,6 +1278,7 @@ int ifilter_parameters_from_frame(InputFilter *ifilter, const AVFrame *frame)
 {
     av_buffer_unref(&ifilter->hw_frames_ctx);
 
+    av_log(0,0,"ifilter_parameters_from_frame(): frame fmt = %d\n", frame->format);
     ifilter->format = frame->format;
 
     ifilter->width               = frame->width;
@@ -1283,6 +1288,8 @@ int ifilter_parameters_from_frame(InputFilter *ifilter, const AVFrame *frame)
     ifilter->sample_rate         = frame->sample_rate;
     ifilter->channels            = frame->channels;
     ifilter->channel_layout      = frame->channel_layout;
+
+    ifilter->sub_pixfmt          = frame->sub_pixfmt;
 
     if (frame->hw_frames_ctx) {
         ifilter->hw_frames_ctx = av_buffer_ref(frame->hw_frames_ctx);

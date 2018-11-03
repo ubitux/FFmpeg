@@ -42,6 +42,7 @@
 #include "filters.h"
 #include "formats.h"
 #include "internal.h"
+#include "subtitle.h"
 
 #include "libavutil/ffversion.h"
 const char av_filter_ffversion[] = "FFmpeg version " FFMPEG_VERSION;
@@ -166,6 +167,7 @@ int avfilter_link(AVFilterContext *src, unsigned srcpad,
     link->type    = src->output_pads[srcpad].type;
     av_assert0(AV_PIX_FMT_NONE == -1 && AV_SAMPLE_FMT_NONE == -1);
     link->format  = -1;
+    link->sub_pixfmt = AV_PIX_FMT_NONE;
     ff_framequeue_init(&link->fifo, &src->graph->internal->frame_queues);
 
     return 0;
@@ -396,7 +398,7 @@ void ff_tlog_link(void *ctx, AVFilterLink *link, int end)
                 link->src ? link->src->filter->name : "",
                 link->dst ? link->dst->filter->name : "",
                 end ? "\n" : "");
-    } else {
+    } else if (link->type == AVMEDIA_TYPE_AUDIO) {
         char buf[128];
         av_get_channel_layout_string(buf, sizeof(buf), -1, link->channel_layout);
 
@@ -669,6 +671,7 @@ AVFilterContext *ff_filter_alloc(const AVFilter *filter, const char *inst_name)
     AVFilterContext *ret;
     int preinited = 0;
 
+    av_log(0,0,"filter=%p\n", filter);
     if (!filter)
         return NULL;
 
@@ -1110,11 +1113,14 @@ int ff_filter_frame(AVFilterLink *link, AVFrame *frame)
             av_assert1(frame->width               == link->w);
             av_assert1(frame->height               == link->h);
         }
-    } else if (link->type == AVMEDIA_TYPE_SUBTITLE) {
-        // TODO?
     } else {
         if (frame->format != link->format) {
             av_log(link->dst, AV_LOG_ERROR, "Format change is not supported\n");
+            goto error;
+        }
+        if (frame->sub_pixfmt != link->sub_pixfmt) {
+            av_log(0,0,"frame/link sub pixfmt %d != %d\n", frame->sub_pixfmt, link->sub_pixfmt);
+            av_log(link->dst, AV_LOG_ERROR, "Bitmap subtitle pixel format change is not supported\n");
             goto error;
         }
         if (frame->channels != link->channels) {
@@ -1557,6 +1563,9 @@ int ff_inlink_make_frame_writable(AVFilterLink *link, AVFrame **rframe)
         break;
     case AVMEDIA_TYPE_AUDIO:
         out = ff_get_audio_buffer(link, frame->nb_samples);
+        break;
+    case AVMEDIA_TYPE_SUBTITLE:
+        out = ff_get_subtitle_buffer(link, frame->sub_nb_rects);
         break;
     default:
         return AVERROR(EINVAL);

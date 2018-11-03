@@ -3183,6 +3183,7 @@ static int opt_audio_qscale(void *optctx, const char *opt, const char *arg)
 
 static int opt_filter_complex(void *optctx, const char *opt, const char *arg)
 {
+    av_log(0,0,"opt_filter_complex\n");
     GROW_ARRAY(filtergraphs, nb_filtergraphs);
     if (!(filtergraphs[nb_filtergraphs - 1] = av_mallocz(sizeof(*filtergraphs[0]))))
         return AVERROR(ENOMEM);
@@ -3198,6 +3199,7 @@ static int opt_filter_complex(void *optctx, const char *opt, const char *arg)
 
 static int opt_filter_complex_script(void *optctx, const char *opt, const char *arg)
 {
+    av_log(0,0,"opt_filter_complex_script\n");
     uint8_t *graph_desc = read_file(arg);
     if (!graph_desc)
         return AVERROR(EINVAL);

@@ -3701,6 +3701,7 @@ avutil_extralibs="d3d11va_extralibs nanosleep_extralibs pthreads_extralibs vaapi
 ffmpeg_deps="avcodec avfilter avformat"
 ffmpeg_select="aformat_filter anull_filter atrim_filter format_filter
                hflip_filter null_filter
+               snull_filter strim_filter
                transpose_filter trim_filter vflip_filter"
 ffmpeg_suggest="ole32 psapi shell32"
 ffplay_deps="avcodec avformat swscale swresample sdl2"
@@ -7642,7 +7643,7 @@ print_enabled_components(){
         fi
     done
     if [ "$name" = "filter_list" ]; then
-        for c in asrc_abuffer vsrc_buffer asink_abuffer vsink_buffer; do
+        for c in asrc_abuffer ssrc_sbuffer vsrc_buffer asink_abuffer ssink_sbuffer vsink_buffer; do
             printf "    &ff_%s,\n" $c >> $TMPH
         done
     fi

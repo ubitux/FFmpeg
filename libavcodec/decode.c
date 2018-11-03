@@ -302,68 +302,6 @@ static int64_t guess_correct_pts(AVCodecContext *ctx,
     return pts;
 }
 
-#if 0
-static int decode_subtitle_frame(AVCodecContext *avctx,
-                                 AVFrame *frame,
-                                 int *got_frame_ptr,
-                                 const AVPacket *avpkt)
-{
-    int i, ret, size;
-    AVSubtitle sub = {0};
-
-    *got_frame_ptr = 0;
-    size = avcodec_decode_subtitle2(avctx, &sub, got_frame_ptr, avpkt);
-    if (size < 0)
-        return size;
-
-    frame->pts                   =
-    frame->best_effort_timestamp = avpkt->pts;
-    frame->pkt_duration          = avpkt->duration;
-    frame->pkt_pos               = avpkt->pos;
-    frame->sub_nb_rects          = sub.num_rects;
-    frame->format                = sub.format ? AV_PIX_FMT_NONE
-                                              : AV_PIX_FMT_PAL8;
-
-    frame->sub_start_display = sub.start_display_time ? av_rescale_q(sub.start_display_time, av_make_q(1, 1000), AV_TIME_BASE_Q)
-                                                      : AV_NOPTS_VALUE;
-    frame->sub_end_display   = sub.end_display_time   ? av_rescale_q(sub.end_display_time,   av_make_q(1, 1000), AV_TIME_BASE_Q)
-                                                      : AV_NOPTS_VALUE;
-
-    /* Allocate sub_nb_rects AVFrameSubtitleRectangle */
-    ret = av_frame_get_buffer(frame, 0);
-    if (ret < 0) {
-        avsubtitle_free(&sub);
-        return ret;
-    }
-
-    /* Transfer data from AVSubtitleRect to AVFrameSubtitleRectangle */
-    for (i = 0; i < sub.num_rects; i++) {
-        AVSubtitleRect *src_rect = sub.rects[i];
-        AVFrameSubtitleRectangle *dst_rect = (AVFrameSubtitleRectangle *)frame->extended_data[i];
-
-        if (frame->format == AV_PIX_FMT_NONE) {
-            dst_rect->text = src_rect->ass;
-        } else {
-            dst_rect->x = src_rect->x;
-            dst_rect->y = src_rect->y;
-            dst_rect->w = src_rect->w;
-            dst_rect->h = src_rect->h;
-            memcpy(dst_rect->data,     src_rect->data,     sizeof(src_rect->data));
-            memcpy(dst_rect->linesize, src_rect->linesize, sizeof(src_rect->linesize));
-        }
-        dst_rect->flags = src_rect->flags;
-
-        // we free and make sure it is set to NULL so the data inside
-        // is not freed after destructing the AVSubtitle
-        av_freep(&sub.rects[i]);
-    }
-    sub.num_rects = 0;
-    avsubtitle_free(&sub);
-
-    return size;
-}
-#endif
-
 /*
  * The core of the receive_frame_wrapper for the decoders implementing
  * the simple API. Certain decoders might consume partial packets without
@@ -380,8 +318,10 @@ static inline int decode_simple_internal(AVCodecContext *avctx, AVFrame *frame)
     int ret;
 
     if (!pkt->data && !avci->draining) {
+        av_log(0,0,"no data in the packet, decode one\n");
         av_packet_unref(pkt);
         ret = ff_decode_get_packet(avctx, pkt);
+        av_log(0,0,"ff_decode_get_packet()=%s\n", av_err2str(ret));
         if (ret < 0 && ret != AVERROR_EOF)
             return ret;
     }
@@ -398,6 +338,106 @@ static inline int decode_simple_internal(AVCodecContext *avctx, AVFrame *frame)
 
     got_frame = 0;
 
+    // TODO: delete this compatibility code when all subtitles decoders moved
+    // to receive_frame
+    if (avctx->codec->type == AVMEDIA_TYPE_SUBTITLE) {
+        int i;
+        AVSubtitle sub = {0};
+        int frame_num = avctx->frame_number;
+
+        const int pkt_size = pkt->size;
+        av_log(0,0,"::> decoding pkt of size %d\n", pkt->size);
+        ret = avcodec_decode_subtitle2(avctx, &sub, &got_frame, pkt);
+        av_log(0,0,"::< decoded %s (%d) got_frame:%d\n", ret < 0 ? av_err2str(ret) : "ok", ret, got_frame);
+        avctx->frame_number = frame_num; // prevent double counting from avcodec_decode_subtitle2 and avcodec_receive_frame
+
+        av_assert0(pkt_size == pkt->size);
+        if (ret == 0 && !got_frame) {
+            ret = pkt->size;
+            av_log(0,0,"ret==0 && no frame -> ret=%d\n", ret);
+        }
+
+        if (ret >= 0 && got_frame) {
+            av_log(0,0,"COPY PROPS FROM CACHED PACKET PTS %"PRId64"\n", avctx->internal->last_pkt_props->pts);
+            int ret_frame_props = ff_decode_frame_props(avctx, frame);
+            if (ret_frame_props < 0) {
+                ret = ret_frame_props;
+            } else {
+                int ret_get_buffer;
+
+                /*
+                 * avcodec_decode_subtitle2() did rescale AVSubtitle.pts from
+                 * stream timebase to AV_TIME_BASE_Q, but AVFrame.pts needs to
+                 * be in stream timebase, so we revert the operation.
+                 *
+                 * TODO: remove these two conversions altogether by removing
+                 * the intermediate AVSubtitle layer.
+                 *
+                 * Note: we can not use the AVPacket information to fill the
+                 * AVFrame.pkt_* fields due to the potential delay.
+                 */
+                if (sub.pts != AV_NOPTS_VALUE && avctx->pkt_timebase.num) {
+                    frame->pts                   =
+                    frame->best_effort_timestamp = av_rescale_q(sub.pts, AV_TIME_BASE_Q, avctx->pkt_timebase);
+                    frame->pkt_duration          = av_rescale_q(sub.end_display_time, av_make_q(1, 1000), avctx->pkt_timebase);
+                }
+                frame->sub_nb_rects          = sub.num_rects;
+                frame->sub_start_display     = av_rescale_q(sub.start_display_time, av_make_q(1, 1000), AV_TIME_BASE_Q);
+                frame->sub_end_display       = av_rescale_q(sub.end_display_time,   av_make_q(1, 1000), AV_TIME_BASE_Q);
+
+
+                av_log(0,0,"DECODE FRAME PKT PTS=%"PRId64"\n", frame->pts);
+                av_log(0,0,"DECODE FRAME PKT DURATION=%"PRId64"\n", frame->pkt_duration);
+
+                switch (sub.format) {
+                case 0:
+                    frame->format     = AV_SUBTITLE_FMT_BITMAP;
+                    frame->sub_pixfmt = AV_PIX_FMT_PAL8;
+                    break;
+                case 1:
+                    frame->format     = AV_SUBTITLE_FMT_TEXT;
+                    frame->sub_pixfmt = AV_PIX_FMT_NONE;
+                    break;
+                default:
+                    frame->format     = AV_SUBTITLE_FMT_NONE;
+                    frame->sub_pixfmt = AV_PIX_FMT_NONE;
+                    break;
+                }
+
+                /* Allocate sub_nb_rects AVFrameSubtitleRectangle */
+                ret_get_buffer = av_frame_get_buffer(frame, 0);
+                //av_log(0,0,"ret_get_buffer=%d. %d rects\n", ret_get_buffer, sub.num_rects);
+                if (ret_get_buffer < 0) {
+                    ret = ret_get_buffer;
+                } else {
+                    /* Transfer data from AVSubtitleRect to AVFrameSubtitleRectangle */
+                    for (i = 0; i < sub.num_rects; i++) {
+                        AVSubtitleRect *src_rect = sub.rects[i];
+                        AVFrameSubtitleRectangle *dst_rect = (AVFrameSubtitleRectangle *)frame->extended_data[i];
+
+                        if (frame->format == AV_SUBTITLE_FMT_TEXT) {
+                            dst_rect->text = src_rect->ass;
+                            //av_log(0,0,"frame->extended_data[%d].text=%s\n", i, dst_rect->text);
+                        } else {
+                            dst_rect->x = src_rect->x;
+                            dst_rect->y = src_rect->y;
+                            dst_rect->w = src_rect->w;
+                            dst_rect->h = src_rect->h;
+                            memcpy(dst_rect->data,     src_rect->data,     sizeof(src_rect->data));
+                            memcpy(dst_rect->linesize, src_rect->linesize, sizeof(src_rect->linesize));
+                        }
+                        dst_rect->flags = src_rect->flags;
+
+                        // we free and make sure it is set to NULL so the data inside
+                        // is not freed when destructing the AVSubtitle below
+                        av_freep(&sub.rects[i]);
+                    }
+                }
+            }
+        }
+        sub.num_rects = 0;
+        avsubtitle_free(&sub);
+    } else
     if (HAVE_THREADS && avctx->active_thread_type & FF_THREAD_FRAME) {
         ret = ff_thread_decode_frame(avctx, frame, &got_frame, pkt);
     } else {
@@ -568,12 +608,15 @@ FF_ENABLE_DEPRECATION_WARNINGS
         }
     }
 
+    //av_log(0,0,"compat decode consumed=%zd+%d\n", avci->compat_decode_consumed, ret);
     avci->compat_decode_consumed += ret;
 
     if (ret >= pkt->size || ret < 0) {
+        av_log(0,0,"packet consumed, unref it\n");
         av_packet_unref(pkt);
     } else {
         int consumed = ret;
+        av_log(0,0,"packet not yet consumed (%d/%d)\n", consumed, pkt->size);
 
         pkt->data                += consumed;
         pkt->size                -= consumed;
@@ -584,7 +627,7 @@ FF_ENABLE_DEPRECATION_WARNINGS
         avci->last_pkt_props->dts = AV_NOPTS_VALUE;
     }
 
-    if (got_frame && avctx->codec->type != AVMEDIA_TYPE_SUBTITLE)
+    if (got_frame)
         av_assert0(frame->buf[0]);
 
     return ret < 0 ? ret : 0;
@@ -594,11 +637,15 @@ static int decode_simple_receive_frame(AVCodecContext *avctx, AVFrame *frame)
 {
     int ret;
 
+    av_log(0,0,">>>> DECODE SIMPLE\n");
     while (!frame->buf[0]) {
         ret = decode_simple_internal(avctx, frame);
-        if (ret < 0)
+        if (ret < 0) {
+            av_log(0,0,"<<<< DECODE SIMPLE %s\n", av_err2str(ret));
             return ret;
+        }
     }
+    av_log(0,0,"<<<< DECODE SIMPLE\n");
 
     return 0;
 }
@@ -614,6 +661,7 @@ static int decode_receive_frame_internal(AVCodecContext *avctx, AVFrame *frame)
         ret = avctx->codec->receive_frame(avctx, frame);
     else
         ret = decode_simple_receive_frame(avctx, frame);
+    av_log(0,0,"decode_simple_receive_frame()=%s\n", av_err2str(ret));
 
     if (ret == AVERROR_EOF)
         avci->draining_done = 1;
@@ -648,6 +696,8 @@ int attribute_align_arg avcodec_send_packet(AVCodecContext *avctx, const AVPacke
     AVCodecInternal *avci = avctx->internal;
     int ret;
 
+    //av_log(0,0,"=======> SEND_PACKET()\n");
+
     if (!avcodec_is_open(avctx) || !av_codec_is_decoder(avctx->codec))
         return AVERROR(EINVAL);
 
@@ -672,9 +722,12 @@ int attribute_align_arg avcodec_send_packet(AVCodecContext *avctx, const AVPacke
 
     if (!avci->buffer_frame->buf[0]) {
         ret = decode_receive_frame_internal(avctx, avci->buffer_frame);
+        //av_log(0,0, "ret=%s\n", av_err2str(ret));
         if (ret < 0 && ret != AVERROR(EAGAIN) && ret != AVERROR_EOF)
             return ret;
     }
+
+    //av_log(0,0,"<======= SEND_PACKET OK\n");
 
     return 0;
 }
@@ -711,12 +764,15 @@ int attribute_align_arg avcodec_receive_frame(AVCodecContext *avctx, AVFrame *fr
     AVCodecInternal *avci = avctx->internal;
     int ret, changed;
 
+    //av_log(0,0,"=======> RECEIVE_FRAME()\n");
+
     av_frame_unref(frame);
 
     if (!avcodec_is_open(avctx) || !av_codec_is_decoder(avctx->codec))
         return AVERROR(EINVAL);
 
     if (avci->buffer_frame->buf[0]) {
+        av_log(0,0,"BUFFER FRAME OKAY\n");
         av_frame_move_ref(frame, avci->buffer_frame);
     } else {
         ret = decode_receive_frame_internal(avctx, frame);
@@ -732,6 +788,7 @@ int attribute_align_arg avcodec_receive_frame(AVCodecContext *avctx, AVFrame *fr
         }
     }
 
+    av_log(0,0,"<======= FRAME %d RECEIVED\n", avctx->frame_number);
     avctx->frame_number++;
 
     if (avctx->flags & AV_CODEC_FLAG_DROPCHANGED) {
@@ -1069,6 +1126,7 @@ int avcodec_decode_subtitle2(AVCodecContext *avctx, AVSubtitle *sub,
             if (avctx->pkt_timebase.num && avpkt->pts != AV_NOPTS_VALUE)
                 sub->pts = av_rescale_q(avpkt->pts,
                                         avctx->pkt_timebase, AV_TIME_BASE_Q);
+            av_log(0,0,"sub decode call on pkt pts %"PRId64"\n", avpkt->pts);
             ret = avctx->codec->decode(avctx, sub, got_sub_ptr, &pkt_recoded);
             av_assert1((ret >= 0) >= !!*got_sub_ptr &&
                        !!*got_sub_ptr >= !!sub->num_rects);

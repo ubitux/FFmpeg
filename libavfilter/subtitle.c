@@ -46,15 +46,15 @@ AVFrame *ff_default_get_subtitle_buffer(AVFilterLink *link, int nb_rects)
     return frame;
 }
 
-AVFrame *ff_get_subtitle_buffer(AVFilterLink *link, int nb_samples)
+AVFrame *ff_get_subtitle_buffer(AVFilterLink *link, int nb_rects)
 {
     AVFrame *ret = NULL;
 
     if (link->dstpad->get_subtitle_buffer)
-        ret = link->dstpad->get_audio_buffer(link, nb_samples);
+        ret = link->dstpad->get_subtitle_buffer(link, nb_rects);
 
     if (!ret)
-        ret = ff_default_get_audio_buffer(link, nb_samples);
+        ret = ff_default_get_subtitle_buffer(link, nb_rects);
 
     return ret;
 }

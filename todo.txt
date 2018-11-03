@@ -1,0 +1,17 @@
+TODO:
+- heartbeat mechanism
+- drop sub2video (needs heartbeat)
+- properly deal with -ss and -t (need strim filter?)
+- sub_start_display/sub_end_display needs to be honored
+- find a test case for dvbsub as it's likely broken (ffmpeg.c hack is
+  removed and should be replaced by a EAGAIN logic in lavc/utils.c)
+- make it pass FATE:
+  * fix cc/subcc
+  * broke various other stuff
+- Changelog/APIchanges
+- proper API doxy
+- update lavfi/subtitles?
+- merge [avs]null filters
+- filters doc
+- avcodec_default_get_buffer2?
+- how to transfer subtitle header down to libavfilter?

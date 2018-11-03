@@ -365,6 +365,7 @@ AVFilter ff_ssink_sbuffer = {
     .priv_size     = sizeof(BufferSinkContext),
     .init_opaque   = ssink_init,
     //.query_formats = ssink_query_formats,
+    .activate      = activate,
     .inputs        = avfilter_ssink_sbuffer_inputs,
     .outputs       = NULL,
 };

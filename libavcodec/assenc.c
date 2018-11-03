@@ -23,6 +23,7 @@
 
 #include "avcodec.h"
 #include "ass.h"
+#include "encode.h"
 #include "libavutil/avstring.h"
 #include "libavutil/internal.h"
 #include "libavutil/mem.h"
@@ -110,6 +111,7 @@ AVCodec ff_ssa_encoder = {
     .id           = AV_CODEC_ID_ASS,
     .init         = ass_encode_init,
     .encode_sub   = ass_encode_frame,
+    .encode2      = ff_compat_encode_subtitle_frame,
     .priv_data_size = sizeof(ASSEncodeContext),
 };
 #endif
@@ -122,6 +124,7 @@ AVCodec ff_ass_encoder = {
     .id           = AV_CODEC_ID_ASS,
     .init         = ass_encode_init,
     .encode_sub   = ass_encode_frame,
+    .encode2      = ff_compat_encode_subtitle_frame,
     .priv_data_size = sizeof(ASSEncodeContext),
 };
 #endif

@@ -20,6 +20,7 @@
  */
 #include "avcodec.h"
 #include "bytestream.h"
+#include "encode.h"
 #include "internal.h"
 #include "libavutil/avassert.h"
 #include "libavutil/bprint.h"
@@ -491,6 +492,7 @@ AVCodec ff_dvdsub_encoder = {
     .id             = AV_CODEC_ID_DVD_SUBTITLE,
     .init           = dvdsub_init,
     .encode_sub     = dvdsub_encode,
+    .encode2        = ff_compat_encode_subtitle_frame,
     .priv_class     = &dvdsubenc_class,
     .priv_data_size = sizeof(DVDSubtitleContext),
 };

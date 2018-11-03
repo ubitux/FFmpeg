@@ -21,6 +21,7 @@
 
 #include <stdarg.h>
 #include "avcodec.h"
+#include "encode.h"
 #include "libavutil/opt.h"
 #include "libavutil/avassert.h"
 #include "libavutil/avstring.h"
@@ -771,5 +772,6 @@ AVCodec ff_movtext_encoder = {
     .priv_class     = &mov_text_encoder_class,
     .init           = mov_text_encode_init,
     .encode_sub     = mov_text_encode_frame,
+    .encode2        = ff_compat_encode_subtitle_frame,
     .close          = mov_text_encode_close,
 };

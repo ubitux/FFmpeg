@@ -21,6 +21,7 @@
 
 #include <stdarg.h>
 #include "avcodec.h"
+#include "encode.h"
 #include "libavutil/avstring.h"
 #include "libavutil/bprint.h"
 #include "ass_split.h"
@@ -313,6 +314,7 @@ AVCodec ff_srt_encoder = {
     .priv_data_size = sizeof(SRTContext),
     .init           = srt_encode_init,
     .encode_sub     = srt_encode_frame,
+    .encode2        = ff_compat_encode_subtitle_frame,
     .close          = srt_encode_close,
 };
 #endif
@@ -326,6 +328,7 @@ AVCodec ff_subrip_encoder = {
     .priv_data_size = sizeof(SRTContext),
     .init           = srt_encode_init,
     .encode_sub     = srt_encode_frame,
+    .encode2        = ff_compat_encode_subtitle_frame,
     .close          = srt_encode_close,
 };
 #endif
@@ -339,6 +342,7 @@ AVCodec ff_text_encoder = {
     .priv_data_size = sizeof(SRTContext),
     .init           = srt_encode_init,
     .encode_sub     = text_encode_frame,
+    .encode2        = ff_compat_encode_subtitle_frame,
     .close          = srt_encode_close,
 };
 #endif

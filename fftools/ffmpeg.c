@@ -770,6 +770,10 @@ static void write_packet(OutputFile *of, AVPacket *pkt, OutputStream *ost, int u
         }
     }
 
+    av_log(0,0,"WRITE PKT RESCALE %s from mux tb:%d/%d to ost tb:%d/%d\n",
+           av_ts2str(pkt->pts),
+           ost->mux_timebase.num, ost->mux_timebase.den,
+           ost->st->time_base.num, ost->st->time_base.den);
     av_packet_rescale_ts(pkt, ost->mux_timebase, ost->st->time_base);
 
     if (!(s->oformat->flags & AVFMT_NOTIMESTAMPS)) {
@@ -784,7 +788,9 @@ static void write_packet(OutputFile *of, AVPacket *pkt, OutputStream *ost, int u
                      - FFMIN3(pkt->pts, pkt->dts, ost->last_mux_dts + 1)
                      - FFMAX3(pkt->pts, pkt->dts, ost->last_mux_dts + 1);
         }
-        if ((st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO || st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO || st->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE) &&
+        if ((st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO ||
+             st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO ||
+             st->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE) &&
             pkt->dts != AV_NOPTS_VALUE &&
             !(st->codecpar->codec_id == AV_CODEC_ID_VP9 && ost->stream_copy) &&
             ost->last_mux_dts != AV_NOPTS_VALUE) {
@@ -982,12 +988,17 @@ static void do_subtitle_out(OutputFile *of,
                enc->time_base.num, enc->time_base.den);
     }
 
+    av_log(0,0,"ENCODE FRAME PKT PTS=%"PRId64"\n", frame->pts);
+    av_log(0,0,"ENCODE FRAME PKT DURATION=%"PRId64"\n", frame->pkt_duration);
+
     ret = avcodec_send_frame(enc, frame);
     if (ret < 0)
         goto error;
 
     while (1) {
+        av_log(0,0,">>> avcodec_receive_packet()\n");
         ret = avcodec_receive_packet(enc, &pkt);
+        av_log(0,0,"<<< avcodec_receive_packet() = %s\n", av_err2str(ret));
         if (ret == AVERROR(EAGAIN))
             break;
         if (ret < 0)
@@ -995,7 +1006,13 @@ static void do_subtitle_out(OutputFile *of,
 
         update_benchmark("encode_subtitle %d.%d", ost->file_index, ost->index);
 
+        av_log(0,0,"PRESCALE: pkt.pts->%s pkt->duration=%s enc tb:%d/%d -> mux tb:%d/%d\n",
+               av_ts2str(pkt.pts), av_ts2str(pkt.duration),
+               enc->time_base.num, enc->time_base.den,
+               ost->mux_timebase.num, ost->mux_timebase.den);
         av_packet_rescale_ts(&pkt, enc->time_base, ost->mux_timebase);
+        av_log(0,0,"POSTSCALE: pkt.pts=%s pkt.duration=%s\n",
+               av_ts2str(pkt.pts), av_ts2str(pkt.duration));
 
         if (debug_ts) {
             av_log(NULL, AV_LOG_INFO, "encoder -> type:subtitle "
@@ -1389,6 +1406,8 @@ static int reap_filters(int flush)
     AVFrame *filtered_frame = NULL;
     int i;
 
+    av_log(0,0,"reeeap\n");
+
     /* Reap all buffers present in the buffer sinks */
     for (i = 0; i < nb_output_streams; i++) {
         OutputStream *ost = output_streams[i];
@@ -1417,6 +1436,7 @@ static int reap_filters(int flush)
         filtered_frame = ost->filtered_frame;
 
         while (1) {
+            av_log(0,0,"reap loop\n");
             double float_pts = AV_NOPTS_VALUE; // this is identical to filtered_frame.pts but with higher precision
             ret = av_buffersink_get_frame_flags(filter, filtered_frame,
                                                AV_BUFFERSINK_FLAG_NO_REQUEST);
@@ -1451,6 +1471,9 @@ static int reap_filters(int flush)
                 filtered_frame->pts =
                     av_rescale_q(filtered_frame->pts, filter_tb, enc->time_base) -
                     av_rescale_q(start_time, AV_TIME_BASE_Q, enc->time_base);
+                if (av_buffersink_get_type(filter) == AVMEDIA_TYPE_SUBTITLE)
+                    filtered_frame->pkt_duration =
+                        av_rescale_q(filtered_frame->pkt_duration, filter_tb, enc->time_base);
             }
 
             switch (av_buffersink_get_type(filter)) {
@@ -1477,6 +1500,7 @@ static int reap_filters(int flush)
                 do_audio_out(of, ost, filtered_frame);
                 break;
             case AVMEDIA_TYPE_SUBTITLE:
+                av_log(0,0,"DO SUBTITLE OUT :3\n");
                 do_subtitle_out(of, ost, filtered_frame);
                 break;
             default:
@@ -1487,6 +1511,7 @@ static int reap_filters(int flush)
         }
     }
 
+    av_log(0,0,"reap out\n");
     return 0;
 }
 
@@ -1869,7 +1894,9 @@ static void flush_encoders(void)
             }
         }
 
-        if (enc->codec_type != AVMEDIA_TYPE_VIDEO && enc->codec_type != AVMEDIA_TYPE_AUDIO)
+        if (enc->codec_type != AVMEDIA_TYPE_VIDEO &&
+            enc->codec_type != AVMEDIA_TYPE_AUDIO &&
+            enc->codec_type != AVMEDIA_TYPE_SUBTITLE)
             continue;
 
         for (;;) {
@@ -1883,6 +1910,9 @@ static void flush_encoders(void)
                 break;
             case AVMEDIA_TYPE_VIDEO:
                 desc   = "video";
+                break;
+            case AVMEDIA_TYPE_SUBTITLE:
+                desc   = "subtitle";
                 break;
             default:
                 av_assert0(0);
@@ -2073,7 +2103,8 @@ static int ifilter_has_all_input_formats(FilterGraph *fg)
     int i;
     for (i = 0; i < fg->nb_inputs; i++) {
         if (fg->inputs[i]->format < 0 && (fg->inputs[i]->type == AVMEDIA_TYPE_AUDIO ||
-                                          fg->inputs[i]->type == AVMEDIA_TYPE_VIDEO))
+                                          fg->inputs[i]->type == AVMEDIA_TYPE_VIDEO ||
+                                          fg->inputs[i]->type == AVMEDIA_TYPE_SUBTITLE))
             return 0;
     }
     return 1;
@@ -2084,8 +2115,19 @@ static int ifilter_send_frame(InputFilter *ifilter, AVFrame *frame)
     FilterGraph *fg = ifilter->graph;
     int need_reinit, ret, i;
 
+    av_log(0,0,"IFILTER SEND FRAME FORMAT %d\n", frame->format);
+    if (fg->graph) {
+        char *graph_str = avfilter_graph_dump(fg->graph, NULL);
+        av_log(0,0,"send frame pts=%s to: %s\n", av_ts2str(frame->pts), graph_str);
+        av_free(graph_str);
+    } else {
+        av_log(0,0,"send frame pts=%s to... nograph\n", av_ts2str(frame->pts));
+    }
+
     /* determine if the parameters for this input changed */
     need_reinit = ifilter->format != frame->format;
+    av_log(0,0,"ifilter->format=%d frame->format=%d\n",
+           ifilter->format, frame->format);
 
     switch (ifilter->ist->st->codecpar->codec_type) {
     case AVMEDIA_TYPE_AUDIO:
@@ -2096,6 +2138,9 @@ static int ifilter_send_frame(InputFilter *ifilter, AVFrame *frame)
     case AVMEDIA_TYPE_VIDEO:
         need_reinit |= ifilter->width  != frame->width ||
                        ifilter->height != frame->height;
+        break;
+    case AVMEDIA_TYPE_SUBTITLE:
+        need_reinit |= ifilter->sub_pixfmt != frame->sub_pixfmt;
         break;
     }
 
@@ -2114,8 +2159,10 @@ static int ifilter_send_frame(InputFilter *ifilter, AVFrame *frame)
 
     /* (re)init the graph if possible, otherwise buffer the frame and return */
     if (need_reinit || !fg->graph) {
+        av_log(0,0,"(re)init graph\n");
         for (i = 0; i < fg->nb_inputs; i++) {
             if (!ifilter_has_all_input_formats(fg)) {
+                av_log(0,0,"ifilter does not have all input formats\n");
                 AVFrame *tmp = av_frame_clone(frame);
                 if (!tmp)
                     return AVERROR(ENOMEM);
@@ -2128,17 +2175,20 @@ static int ifilter_send_frame(InputFilter *ifilter, AVFrame *frame)
                         return ret;
                     }
                 }
+                av_log(0,0,"fifo generic write cloned frame\n");
                 av_fifo_generic_write(ifilter->frame_queue, &tmp, sizeof(tmp), NULL);
                 return 0;
             }
         }
 
+        av_log(0,0,"reap filter 1\n");
         ret = reap_filters(1);
         if (ret < 0 && ret != AVERROR_EOF) {
             av_log(NULL, AV_LOG_ERROR, "Error while filtering: %s\n", av_err2str(ret));
             return ret;
         }
 
+        av_log(0,0,"configure fg\n");
         ret = configure_filtergraph(fg);
         if (ret < 0) {
             av_log(NULL, AV_LOG_ERROR, "Error reinitializing filters!\n");
@@ -2146,6 +2196,7 @@ static int ifilter_send_frame(InputFilter *ifilter, AVFrame *frame)
         }
     }
 
+    av_log(0,0,"IFILTER SEND FRAME FORMAT NOW %d\n", frame->format);
     ret = av_buffersrc_add_frame_flags(ifilter->filter, frame, AV_BUFFERSRC_FLAG_PUSH);
     if (ret < 0) {
         if (ret != AVERROR_EOF)
@@ -2170,7 +2221,9 @@ static int ifilter_send_eof(InputFilter *ifilter, int64_t pts)
         // the filtergraph was never configured
         if (ifilter->format < 0)
             ifilter_parameters_from_codecpar(ifilter, ifilter->ist->st->codecpar);
-        if (ifilter->format < 0 && (ifilter->type == AVMEDIA_TYPE_AUDIO || ifilter->type == AVMEDIA_TYPE_VIDEO)) {
+        if (ifilter->format < 0 && (ifilter->type == AVMEDIA_TYPE_AUDIO ||
+                                    ifilter->type == AVMEDIA_TYPE_VIDEO ||
+                                    ifilter->type == AVMEDIA_TYPE_SUBTITLE)) {
             av_log(NULL, AV_LOG_ERROR, "Cannot determine format of input stream %d:%d after EOF\n", ifilter->ist->file_index, ifilter->ist->st->index);
             return AVERROR_INVALIDDATA;
         }
@@ -2190,14 +2243,18 @@ static int decode(AVCodecContext *avctx, AVFrame *frame, int *got_frame, AVPacke
     *got_frame = 0;
 
     if (pkt) {
+        av_log(0,0,">>> send packet\n");
         ret = avcodec_send_packet(avctx, pkt);
+        av_log(0,0,"<<< send packet = %s\n", av_err2str(ret));
         // In particular, we don't expect AVERROR(EAGAIN), because we read all
         // decoded frames with avcodec_receive_frame() until done.
         if (ret < 0 && ret != AVERROR_EOF)
             return ret;
     }
 
+    av_log(0,0,">>> receive frame\n");
     ret = avcodec_receive_frame(avctx, frame);
+    av_log(0,0,"<<< receive frame = %s\n", av_err2str(ret));
     if (ret < 0 && ret != AVERROR(EAGAIN))
         return ret;
     if (ret >= 0)
@@ -2211,6 +2268,7 @@ static int send_frame_to_filters(InputStream *ist, AVFrame *decoded_frame)
     int i, ret;
     AVFrame *f;
 
+    av_log(0,0,"##> send frame pts=%s to filters (%d filters)\n", av_ts2str(decoded_frame->pts), ist->nb_filters);
     av_assert1(ist->nb_filters > 0); /* ensure ret is initialized */
     for (i = 0; i < ist->nb_filters; i++) {
         if (i < ist->nb_filters - 1) {
@@ -2229,6 +2287,7 @@ static int send_frame_to_filters(InputStream *ist, AVFrame *decoded_frame)
             break;
         }
     }
+    av_log(0,0,"##< %s\n", av_err2str(ret));
     return ret;
 }
 
@@ -2237,6 +2296,8 @@ static int decode_subtitle(InputStream *ist, AVPacket *pkt, int *got_output,
 {
     int ret, err;
     AVFrame *decoded_frame;
+
+    av_log(0,0,">>> DECODE_SUBTITLE %p\n", pkt);
 
     if (!ist->decoded_frame && !(ist->decoded_frame = av_frame_alloc()))
         return AVERROR(ENOMEM);
@@ -2253,8 +2314,10 @@ static int decode_subtitle(InputStream *ist, AVPacket *pkt, int *got_output,
     if (ret != AVERROR_EOF)
         check_decode_result(ist, got_output, ret);
 
-    if (!*got_output || ret < 0)
+    if (!*got_output || ret < 0) {
+        av_log(0,0,"<<< DECODE_SUBTITLE NO OUTPUT (ret=%s)\n", av_err2str(ret));
         return ret;
+    }
 
     ist->frames_decoded++;
 
@@ -2262,6 +2325,7 @@ static int decode_subtitle(InputStream *ist, AVPacket *pkt, int *got_output,
 
     av_frame_unref(ist->filter_frame);
     av_frame_unref(decoded_frame);
+    av_log(0,0,"<<< DECODE_SUBTITLE GOT OUTPUT (ret=%s)\n", av_err2str(err < 0 ? err : ret));
     return err < 0 ? err : ret;
 }
 
@@ -2482,6 +2546,8 @@ static int process_input_packet(InputStream *ist, const AVPacket *pkt, int no_eo
     int repeating = 0;
     int eof_reached = 0;
 
+    av_log(0,0,"-> process_input_packet\n");
+
     AVPacket avpkt;
     if (!ist->saw_first_ts) {
         ist->dts = ist->st->avg_frame_rate.num ? - ist->dec_ctx->has_b_frames * AV_TIME_BASE / av_q2d(ist->st->avg_frame_rate) : 0;
@@ -2519,6 +2585,8 @@ static int process_input_packet(InputStream *ist, const AVPacket *pkt, int no_eo
         int64_t duration_pts = 0;
         int got_output = 0;
         int decode_failed = 0;
+
+        av_log(0,0,"decoding needed\n");
 
         ist->pts = ist->next_pts;
         ist->dts = ist->next_dts;
@@ -2558,6 +2626,7 @@ static int process_input_packet(InputStream *ist, const AVPacket *pkt, int no_eo
         case AVMEDIA_TYPE_SUBTITLE:
             ret = decode_subtitle(ist, repeating ? NULL : &avpkt, &got_output,
                                   &decode_failed);
+            av_log(0,0,"decode_subtitle got_output=%d\n", got_output);
             break;
         default:
             return -1;
@@ -2581,8 +2650,10 @@ static int process_input_packet(InputStream *ist, const AVPacket *pkt, int no_eo
             break;
         }
 
-        if (got_output)
+        if (got_output) {
+            av_log(0,0,"GOT OUTPUT OK?\n");
             ist->got_output = 1;
+        }
 
         if (!got_output)
             break;
@@ -2600,6 +2671,7 @@ static int process_input_packet(InputStream *ist, const AVPacket *pkt, int no_eo
 
         repeating = 1;
     }
+    av_log(0,0,"DECODING DONE (IST GOT_OUTPUT=%d)\n", ist->got_output);
 
     /* after flushing, send an EOF on all the filter inputs attached to the stream */
     /* except when looping we need to flush but not to send an EOF */
@@ -2651,6 +2723,8 @@ static int process_input_packet(InputStream *ist, const AVPacket *pkt, int no_eo
 
         do_streamcopy(ist, ost, pkt);
     }
+
+    av_log(0,0,"<- process_input_packet eof_reached=%d\n", eof_reached);
 
     return !eof_reached;
 }
@@ -3327,7 +3401,7 @@ static int init_output_stream_encode(OutputStream *ost)
         }
         break;
     case AVMEDIA_TYPE_SUBTITLE:
-        enc_ctx->time_base = AV_TIME_BASE_Q;
+        init_encoder_time_base(ost, AV_TIME_BASE_Q);
         if (!enc_ctx->width) {
             enc_ctx->width     = input_streams[ost->source_index]->st->codecpar->width;
             enc_ctx->height    = input_streams[ost->source_index]->st->codecpar->height;
@@ -3558,8 +3632,31 @@ static int transcode_init(void)
     InputStream *ist;
     char error[1024] = {0};
 
+    av_log(0,0,"nb_filtergraphs=%d\n", nb_filtergraphs);
     for (i = 0; i < nb_filtergraphs; i++) {
         FilterGraph *fg = filtergraphs[i];
+        const AVFilterGraph *avfg = fg->graph;
+        av_log(0,0,"fg[%d].desc=%s [%d inputs, %d outputs] fg=%p\n",
+               i, fg->graph_desc, fg->nb_inputs, fg->nb_outputs, fg);
+
+        av_log(0,0,"fg[%d].graph=%p\n", i, avfg);
+        if (fg->graph) {
+            char *graph_str = avfilter_graph_dump(fg->graph, NULL);
+            av_log(0,0,"fg[%d].graph=%s\n", i, graph_str);
+            av_free(graph_str);
+        }
+
+        for (int x = 0; x < fg->nb_inputs; x++) {
+            InputFilter *input = fg->inputs[x];
+            av_log(0,0,"inputs[%d].name=%s format=%d (belong to graph=%p)\n",
+                   x, input->name, input->format, input->graph);
+        }
+        for (int x = 0; x < fg->nb_outputs; x++) {
+            OutputFilter *output = fg->outputs[x];
+            av_log(0,0,"outputs[%d].name=%s format=%d (belong to graph=%p)\n",
+                   x, output->name, output->format, output->graph);
+        }
+
         for (j = 0; j < fg->nb_outputs; j++) {
             OutputFilter *ofilter = fg->outputs[j];
             if (!ofilter->ost || ofilter->ost->source_index >= 0)
@@ -4160,6 +4257,8 @@ static int process_input(int file_index)
     is  = ifile->ctx;
     ret = get_input_packet(ifile, &pkt);
 
+    av_log(0,0,"process input file %d. get packet=%s\n", file_index, av_err2str(ret));
+
     if (ret == AVERROR(EAGAIN)) {
         ifile->eagain = 1;
         return ret;
@@ -4201,6 +4300,8 @@ static int process_input(int file_index)
                 exit_program(1);
         }
 
+        av_log(0,0,"eof\n");
+
         for (i = 0; i < ifile->nb_streams; i++) {
             ist = input_streams[ifile->ist_index + i];
             if (ist->decoding_needed) {
@@ -4213,8 +4314,7 @@ static int process_input(int file_index)
             for (j = 0; j < nb_output_streams; j++) {
                 OutputStream *ost = output_streams[j];
 
-                if (ost->source_index == ifile->ist_index + i &&
-                    (ost->stream_copy || ost->enc->type == AVMEDIA_TYPE_SUBTITLE))
+                if (ost->source_index == ifile->ist_index + i && ost->stream_copy)
                     finish_output_stream(ost);
             }
         }
@@ -4265,6 +4365,8 @@ static int process_input(int file_index)
 
     if(!ist->wrap_correction_done && is->start_time != AV_NOPTS_VALUE && ist->st->pts_wrap_bits < 64){
         int64_t stime, stime2;
+
+        av_log(0,0,"WRAP CORRECTION\n");
         // Correcting starttime based on the enabled streams
         // FIXME this ideally should be done before the first use of starttime but we do not know which are the enabled streams at that point.
         //       so we instead do it here as part of discontinuity handling
@@ -4417,7 +4519,9 @@ static int process_input(int file_index)
                av_ts2timestr(input_files[ist->file_index]->ts_offset, &AV_TIME_BASE_Q));
     }
 
+    av_log(0,0,">> sub2video heartbeat?\n");
     sub2video_heartbeat(ist, pkt.pts);
+    av_log(0,0,"<< sub2video heartbeat?\n");
 
     process_input_packet(ist, &pkt, 0);
 
@@ -4486,8 +4590,11 @@ static int transcode_step(void)
     InputStream  *ist = NULL;
     int ret;
 
+    av_log(0,0,"transcode step\n");
+
     ost = choose_output();
     if (!ost) {
+        av_log(0,0,"no ost\n");
         if (got_eagain()) {
             reset_eagain();
             av_usleep(10000);
@@ -4497,19 +4604,24 @@ static int transcode_step(void)
         return AVERROR_EOF;
     }
 
+    av_log(0,0,"ost->filter=%p\n", ost->filter);
     if (ost->filter && !ost->filter->graph->graph) {
         if (ifilter_has_all_input_formats(ost->filter->graph)) {
+            av_log(0,0,"::configure fg\n");
             ret = configure_filtergraph(ost->filter->graph);
             if (ret < 0) {
                 av_log(NULL, AV_LOG_ERROR, "Error reinitializing filters!\n");
                 return ret;
             }
+        } else {
+            av_log(0,0,"ifilter haz not all input formats\n");
         }
     }
 
     if (ost->filter && ost->filter->graph->graph) {
         if (!ost->initialized) {
             char error[1024] = {0};
+            av_log(0,0,"::init ost\n");
             ret = init_output_stream(ost, error, sizeof(error));
             if (ret < 0) {
                 av_log(NULL, AV_LOG_ERROR, "Error initializing output stream %d:%d -- %s\n",
@@ -4517,6 +4629,7 @@ static int transcode_step(void)
                 exit_program(1);
             }
         }
+        av_log(0,0,"::transcode from filter\n");
         if ((ret = transcode_from_filter(ost->filter->graph, &ist)) < 0)
             return ret;
         if (!ist)
@@ -4532,6 +4645,7 @@ static int transcode_step(void)
         }
         if (!ist) {
             ost->inputs_done = 1;
+            av_log(0,0,"inputs done\n");
             return 0;
         }
     } else {
@@ -4539,7 +4653,9 @@ static int transcode_step(void)
         ist = input_streams[ost->source_index];
     }
 
+    av_log(0,0,"::process_input\n");
     ret = process_input(ist->file_index);
+    av_log(0,0,"process_input=%s\n", av_err2str(ret));
     if (ret == AVERROR(EAGAIN)) {
         if (input_files[ist->file_index]->eagain)
             ost->unavailable = 1;

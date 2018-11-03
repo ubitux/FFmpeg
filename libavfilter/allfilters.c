@@ -475,6 +475,7 @@ extern AVFilter ff_vsink_nullsink;
 
 /* subtitle filters */
 extern AVFilter ff_sf_snull;
+extern AVFilter ff_sf_strim;
 
 extern AVFilter ff_ssink_snullsink;
 

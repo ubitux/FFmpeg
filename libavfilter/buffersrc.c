@@ -33,6 +33,7 @@
 #include "libavutil/internal.h"
 #include "libavutil/opt.h"
 #include "libavutil/samplefmt.h"
+#include "libavutil/subtitlefmt.h"
 #include "libavutil/timestamp.h"
 #include "audio.h"
 #include "avfilter.h"
@@ -65,7 +66,7 @@ typedef struct BufferSourceContext {
     char    *channel_layout_str;
 
     /* subtitle only */
-    int sub_format;
+    enum AVSubtitleFormat subtitle_fmt;
 
     int eof;
 } BufferSourceContext;
@@ -174,6 +175,7 @@ int attribute_align_arg av_buffersrc_add_frame_flags(AVFilterContext *ctx, AVFra
     if (!(copy = av_frame_alloc()))
         return AVERROR(ENOMEM);
     ret = av_frame_ref(copy, frame);
+    av_log(0,0,"frame ret ret=%s\n", av_err2str(ret));
     if (ret >= 0)
         ret = av_buffersrc_add_frame_internal(ctx, copy, flags);
 
@@ -331,10 +333,9 @@ AVFILTER_DEFINE_CLASS(abuffer);
 
 static const AVOption sbuffer_options[] = {
     { "time_base",      NULL, OFFSET(time_base),  AV_OPT_TYPE_RATIONAL, { .dbl = 0 }, 0, INT_MAX, S },
-    { "format",         NULL, OFFSET(sub_format), AV_OPT_TYPE_INT,      { .i64 = -1 }, -1, 1, S, "format" },
-        { "unspecified", NULL, 0, AV_OPT_TYPE_CONST, {.i64=-1}, INT_MIN, INT_MAX, S, "format" },
-        { "bitmap",      NULL, 0, AV_OPT_TYPE_CONST, {.i64=0},  INT_MIN, INT_MAX, S, "format" },
-        { "text",        NULL, 0, AV_OPT_TYPE_CONST, {.i64=1},  INT_MIN, INT_MAX, S, "format" },
+    { "subtitle_fmt",   NULL, OFFSET(subtitle_fmt), AV_OPT_TYPE_INT, { .i64 = AV_SUBTITLE_FMT_NONE }, .min = AV_SUBTITLE_FMT_NONE, .max = INT_MAX, .flags = S, "format" },
+        { "bitmap",      NULL, 0, AV_OPT_TYPE_CONST, {.i64=AV_SUBTITLE_FMT_BITMAP}, INT_MIN, INT_MAX, S, "format" },
+        { "text",        NULL, 0, AV_OPT_TYPE_CONST, {.i64=AV_SUBTITLE_FMT_TEXT},   INT_MIN, INT_MAX, S, "format" },
     { NULL }
 };
 
@@ -424,7 +425,9 @@ static int query_formats(AVFilterContext *ctx)
             return ret;
         break;
     case AVMEDIA_TYPE_SUBTITLE:
-        if ((ret = ff_add_format(&formats, c->sub_format)) < 0)
+        av_log(0,0,"query format with sub fmt %s\n", av_get_subtitle_fmt_name(c->subtitle_fmt));
+        if ((ret = ff_add_format         (&formats, c->subtitle_fmt)) < 0 ||
+            (ret = ff_set_common_formats (ctx     , formats        )) < 0)
             return ret;
         break;
     default:
@@ -477,10 +480,7 @@ static int request_frame(AVFilterLink *link)
 
 static av_cold int init_subtitle(AVFilterContext *ctx)
 {
-    BufferSourceContext *c = ctx->priv;
-
-    if (!(c->fifo = av_fifo_alloc(sizeof(AVFrame*))))
-        return AVERROR(ENOMEM);
+    av_log(0,0,"sbuffer init sub ok\n");
     return 0;
 }
 
@@ -537,7 +537,6 @@ static const AVFilterPad avfilter_ssrc_sbuffer_outputs[] = {
         .name          = "default",
         .type          = AVMEDIA_TYPE_SUBTITLE,
         .request_frame = request_frame,
-        .poll_frame    = poll_frame,
         .config_props  = config_props,
     },
     { NULL }

@@ -23,6 +23,7 @@
 #include "internal.h"
 #include "subtitles.h"
 #include "libavutil/avstring.h"
+#include "libavutil/timestamp.h"
 #include "libavutil/bprint.h"
 #include "libavutil/intreadwrite.h"
 
@@ -183,13 +184,19 @@ fail:
 static int scc_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
     SCCContext *scc = s->priv_data;
-    return ff_subtitles_queue_read_packet(&scc->q, pkt);
+    int ret = ff_subtitles_queue_read_packet(&scc->q, pkt);
+    AVRational tb = av_make_q(1, 1000);
+    av_log(0,0,"SCC READ PKT PTS %"PRId64" t=%s dur=%s: ret=%d\n",
+           pkt->pts, av_ts2timestr(pkt->pts, &tb),
+           av_ts2timestr(pkt->duration, &tb), ret);
+    return ret;
 }
 
 static int scc_read_seek(AVFormatContext *s, int stream_index,
                          int64_t min_ts, int64_t ts, int64_t max_ts, int flags)
 {
     SCCContext *scc = s->priv_data;
+    av_log(0,0,"SCC SEEK\n");
     return ff_subtitles_queue_seek(&scc->q, s, stream_index,
                                    min_ts, ts, max_ts, flags);
 }
@@ -197,6 +204,7 @@ static int scc_read_seek(AVFormatContext *s, int stream_index,
 static int scc_read_close(AVFormatContext *s)
 {
     SCCContext *scc = s->priv_data;
+    av_log(0,0,"SCC READ CLOSE\n");
     ff_subtitles_queue_clean(&scc->q);
     return 0;
 }

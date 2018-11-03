@@ -464,6 +464,8 @@ struct AVFilterLink {
      */
     AVRational time_base;
 
+    enum AVPixelFormat sub_pixfmt; ///< agreed upon bitmap subtitle pixel format
+
     /*****************************************************************
      * All fields below this line are not part of the public API. They
      * may not be used outside of libavfilter and can be changed and

@@ -20,6 +20,7 @@
  */
 #include "avcodec.h"
 #include "bytestream.h"
+#include "encode.h"
 #include "libavutil/colorspace.h"
 
 typedef struct DVBSubtitleContext {
@@ -526,4 +527,5 @@ AVCodec ff_dvbsub_encoder = {
     .id             = AV_CODEC_ID_DVB_SUBTITLE,
     .priv_data_size = sizeof(DVBSubtitleContext),
     .encode_sub     = dvbsub_encode,
+    .encode2        = ff_compat_encode_subtitle_frame,
 };

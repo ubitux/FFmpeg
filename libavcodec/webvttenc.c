@@ -22,6 +22,7 @@
 
 #include <stdarg.h>
 #include "avcodec.h"
+#include "encode.h"
 #include "libavutil/avstring.h"
 #include "libavutil/bprint.h"
 #include "ass_split.h"
@@ -232,5 +233,6 @@ AVCodec ff_webvtt_encoder = {
     .priv_data_size = sizeof(WebVTTContext),
     .init           = webvtt_encode_init,
     .encode_sub     = webvtt_encode_frame,
+    .encode2        = ff_compat_encode_subtitle_frame,
     .close          = webvtt_encode_close,
 };

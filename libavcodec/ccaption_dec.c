@@ -919,6 +919,7 @@ static int decode(AVCodecContext *avctx, void *data, int *got_sub, AVPacket *avp
     }
 
     *got_sub = sub->num_rects > 0;
+    av_log(0,0,"ccaption dec got_sub=%d i=%d/%d\n", *got_sub, i, len);
     return len;
 }
 
