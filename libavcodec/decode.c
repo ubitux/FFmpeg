@@ -302,6 +302,68 @@ static int64_t guess_correct_pts(AVCodecContext *ctx,
     return pts;
 }
 
+#if 0
+static int decode_subtitle_frame(AVCodecContext *avctx,
+                                 AVFrame *frame,
+                                 int *got_frame_ptr,
+                                 const AVPacket *avpkt)
+{
+    int i, ret, size;
+    AVSubtitle sub = {0};
+
+    *got_frame_ptr = 0;
+    size = avcodec_decode_subtitle2(avctx, &sub, got_frame_ptr, avpkt);
+    if (size < 0)
+        return size;
+
+    frame->pts                   =
+    frame->best_effort_timestamp = avpkt->pts;
+    frame->pkt_duration          = avpkt->duration;
+    frame->pkt_pos               = avpkt->pos;
+    frame->sub_nb_rects          = sub.num_rects;
+    frame->format                = sub.format ? AV_PIX_FMT_NONE
+                                              : AV_PIX_FMT_PAL8;
+
+    frame->sub_start_display = sub.start_display_time ? av_rescale_q(sub.start_display_time, av_make_q(1, 1000), AV_TIME_BASE_Q)
+                                                      : AV_NOPTS_VALUE;
+    frame->sub_end_display   = sub.end_display_time   ? av_rescale_q(sub.end_display_time,   av_make_q(1, 1000), AV_TIME_BASE_Q)
+                                                      : AV_NOPTS_VALUE;
+
+    /* Allocate sub_nb_rects AVFrameSubtitleRectangle */
+    ret = av_frame_get_buffer(frame, 0);
+    if (ret < 0) {
+        avsubtitle_free(&sub);
+        return ret;
+    }
+
+    /* Transfer data from AVSubtitleRect to AVFrameSubtitleRectangle */
+    for (i = 0; i < sub.num_rects; i++) {
+        AVSubtitleRect *src_rect = sub.rects[i];
+        AVFrameSubtitleRectangle *dst_rect = (AVFrameSubtitleRectangle *)frame->extended_data[i];
+
+        if (frame->format == AV_PIX_FMT_NONE) {
+            dst_rect->text = src_rect->ass;
+        } else {
+            dst_rect->x = src_rect->x;
+            dst_rect->y = src_rect->y;
+            dst_rect->w = src_rect->w;
+            dst_rect->h = src_rect->h;
+            memcpy(dst_rect->data,     src_rect->data,     sizeof(src_rect->data));
+            memcpy(dst_rect->linesize, src_rect->linesize, sizeof(src_rect->linesize));
+        }
+        dst_rect->flags = src_rect->flags;
+
+        // we free and make sure it is set to NULL so the data inside
+        // is not freed after destructing the AVSubtitle
+        av_freep(&sub.rects[i]);
+    }
+    sub.num_rects = 0;
+    avsubtitle_free(&sub);
+
+    return size;
+}
+#endif
+
 /*
  * The core of the receive_frame_wrapper for the decoders implementing
  * the simple API. Certain decoders might consume partial packets without
