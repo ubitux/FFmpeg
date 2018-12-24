@@ -428,6 +428,8 @@ static inline int decode_simple_internal(AVCodecContext *avctx, AVFrame *frame)
             frame->best_effort_timestamp = guess_correct_pts(avctx,
                                                              frame->pts,
                                                              frame->pkt_dts);
+        if (ret >= 0 && !(avctx->flags & AV_CODEC_FLAG_TRUNCATED))
+            ret = pkt->size;
     } else if (avctx->codec->type == AVMEDIA_TYPE_AUDIO) {
         uint8_t *side;
         int side_size;
@@ -540,9 +542,6 @@ FF_ENABLE_DEPRECATION_WARNINGS
 
     if (!got_frame)
         av_frame_unref(frame);
-
-    if (ret >= 0 && avctx->codec->type == AVMEDIA_TYPE_VIDEO && !(avctx->flags & AV_CODEC_FLAG_TRUNCATED))
-        ret = pkt->size;
 
 #if FF_API_AVCTX_TIMEBASE
     if (avctx->framerate.num > 0 && avctx->framerate.den > 0)
