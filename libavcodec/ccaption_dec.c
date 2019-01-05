@@ -919,7 +919,7 @@ static int decode(AVCodecContext *avctx, void *data, int *got_sub, AVPacket *avp
     }
 
     *got_sub = sub->num_rects > 0;
-    return ret;
+    return len;
 }
 
 #define OFFSET(x) offsetof(CCaptionSubContext, x)
